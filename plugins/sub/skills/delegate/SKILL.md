@@ -67,9 +67,13 @@ session on its own.
 
 When a report arrives: read it, act on it, and reply only if you have something
 new to say. Its nickname is in the wrapper's `from-name`, and that bare nickname
-is the `to:` for `SendMessage` from then on. Before the sub's first message you
-have no nickname for it — use `herdr agent prompt <name> "<text>"` if you must
-reach it earlier.
+is the `to:` for `SendMessage` from then on.
+
+To reach a sub **before** its first message, the `nickname:` line in the spawn
+output is its address — `SendMessage` works immediately. Use that, never a shell
+command line: anything you send quotes files and this conversation, so it will
+contain backticks, `$(...)` and quotes that a shell would execute instead of
+deliver. `SendMessage` takes the text as a parameter and has no shell to escape.
 
 ## When it fails
 

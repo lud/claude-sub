@@ -24,7 +24,8 @@ fi
 # The last line is this invocation's sub. Leave the file alone: the relay owns it,
 # and it is what tells this session about the sub on a later turn if this turn
 # does not finish the job.
-tail -1 "$state" | jq -r '
+last="$(tail -1 "$state")"
+printf '%s' "$last" | jq -r '
   "sub_name:    \(.name)",
   "pane:        \(.pane)",
   "model:       \(.model)",
@@ -33,4 +34,8 @@ tail -1 "$state" | jq -r '
   "task_given:  \(.task)",
   "awaiting_context: \(.expect_context)"
 '
+# The sub's own messaging address, so the briefing message can go through
+# SendMessage rather than through a shell command line.
+sub_name="$(printf '%s' "$last" | jq -r '.name // empty')"
+echo "sub_nickname: $(agent_nickname "$sub_name" 2>/dev/null || echo unresolved)"
 echo "parent_nickname: $(my_nickname)"

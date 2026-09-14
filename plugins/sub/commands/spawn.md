@@ -19,10 +19,15 @@ It is already running, and it has been told that you are composing context for i
 and to hold off on committing to an approach until your message lands. It is
 waiting on you right now.
 
-Send it **one** `SendMessage`, addressed to the sub's Claude nickname — which you
-do not have yet, because it has not written to you. Use `herdr agent prompt
-<sub_name> "<text>"` instead: it is the addressed channel that works before the
-first message, and the pane is not yet contested because the sub is still reading.
+Send it **one** `SendMessage`, addressed to the `sub_nickname` in the block above.
+
+Use `SendMessage` and nothing else. Never pass this context through a shell
+command line — not `herdr agent prompt`, not `echo`, not a heredoc into any
+command. The context you are about to send quotes files and this conversation, so
+it will contain backticks, `$(...)`, quotes and backslashes, all of which a shell
+would execute rather than deliver. `SendMessage` takes the text as a parameter, so
+there is no shell to escape. If `sub_nickname` says `unresolved`, say so and stop
+rather than reaching for a shell.
 
 Put in it what the one-line task could not carry and the sub cannot discover on
 its own:
@@ -63,8 +68,7 @@ exists to remove. Report the sub's name and pane to the user, then stop.
 
 Read it, act on it, and reply only if you have something new to say. An
 acknowledgement is a wasted turn on both sides. Its message carries its nickname
-in the wrapper's `from-name`; from then on that bare nickname is the `to:` for
-`SendMessage` in both directions.
+in the wrapper's `from-name`, which is the same address as `sub_nickname`.
 
 ## Invocation
 

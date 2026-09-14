@@ -11,12 +11,16 @@ here="$(cd "$(dirname "$0")" && pwd)"
 
 name=""; model=""; direction=""; force=0; dry=0; expect_context=0; origin="skill"
 
+# Every value-taking option is checked before the shift: `shift 2` on a lone
+# trailing flag fails, leaves the arguments untouched, and spins forever.
+need_value() { [ "$2" -ge 2 ] || die "$1 requires a value"; }
+
 while [ $# -gt 0 ]; do
   case "$1" in
-    --name)           name="${2:-}"; shift 2 ;;
-    --model)          model="${2:-}"; shift 2 ;;
-    --direction)      direction="${2:-}"; shift 2 ;;
-    --origin)         origin="${2:-}"; shift 2 ;;
+    --name)           need_value --name "$#";      name="$2"; shift 2 ;;
+    --model)          need_value --model "$#";     model="$2"; shift 2 ;;
+    --direction)      need_value --direction "$#"; direction="$2"; shift 2 ;;
+    --origin)         need_value --origin "$#";    origin="$2"; shift 2 ;;
     --expect-context) expect_context=1; shift ;;
     --force)          force=1; shift ;;
     --dry-run)        dry=1; shift ;;
@@ -32,10 +36,7 @@ body="$(cat)"
 parent="$(my_nickname)"
 [ -n "$parent" ] || die "could not resolve this session's messaging nickname"
 [ -n "$name" ] || name="$(next_sub_name)"
-case "$name" in
-  [a-z]*) ;;
-  *) die "sub name must match [a-z][a-z0-9_-]{0,31}: $name" ;;
-esac
+valid_sub_name "$name" || die "sub name must match [a-z][a-z0-9_-]{0,31}: $name"
 [ -n "$model" ] || model="$(my_model)"
 [ -n "$model" ] || die "could not resolve a model id; pass --model"
 [ -n "$direction" ] || direction="$(split_direction)"
@@ -60,14 +61,24 @@ if [ "$expect_context" -eq 1 ]; then
 fi
 
 tmp="$(mktemp)"; trap 'rm -f "$tmp"' EXIT
+# Literal substitution: awk's gsub would read `&` in a replacement as the matched
+# text, so a cwd like /tmp/a&b would render as /tmp/a{{CWD}}b.
 BODY="$body" PARENT="$parent" CWD="$PWD" SUB_NAME="$name" BRIEFING_PATH="$briefing" \
 AMENDMENT="$amendment" \
   awk '
+    function subst(s, key, val,   out, i) {
+      out = ""
+      while ((i = index(s, key)) > 0) {
+        out = out substr(s, 1, i - 1) val
+        s = substr(s, i + length(key))
+      }
+      return out s
+    }
     { line = $0
-      gsub(/\{\{PARENT\}\}/,        ENVIRON["PARENT"],        line)
-      gsub(/\{\{CWD\}\}/,           ENVIRON["CWD"],           line)
-      gsub(/\{\{SUB_NAME\}\}/,      ENVIRON["SUB_NAME"],      line)
-      gsub(/\{\{BRIEFING_PATH\}\}/, ENVIRON["BRIEFING_PATH"], line)
+      line = subst(line, "{{PARENT}}",        ENVIRON["PARENT"])
+      line = subst(line, "{{CWD}}",           ENVIRON["CWD"])
+      line = subst(line, "{{SUB_NAME}}",      ENVIRON["SUB_NAME"])
+      line = subst(line, "{{BRIEFING_PATH}}", ENVIRON["BRIEFING_PATH"])
       if (line == "{{BODY}}") { print ENVIRON["BODY"]; next }
       if (line == "{{AMENDMENT}}") {
         if (ENVIRON["AMENDMENT"] != "") print ENVIRON["AMENDMENT"] "\n"
@@ -90,6 +101,7 @@ cp "$tmp" "$briefing" || die "failed to write $briefing"
 # set: without it the sub would read a different registry than the parent wrote to.
 split_env=(--env "SUB_BRIEFING=$briefing" --env "SUB_PARENT=$parent" --env "SUB_NAME=$name")
 [ -n "${CLAUDE_CONFIG_DIR:-}" ] && split_env+=(--env "CLAUDE_CONFIG_DIR=$CLAUDE_CONFIG_DIR")
+[ -n "${SUB_TASKS_DIR:-}" ] && split_env+=(--env "SUB_TASKS_DIR=$SUB_TASKS_DIR")
 
 split="$(herdr pane split --pane "$HERDR_PANE_ID" --direction "$direction" \
   --cwd "$PWD" --no-focus "${split_env[@]}" 2>&1)"
@@ -116,25 +128,36 @@ EOF
 fi
 
 # Record the spawn so the parent learns about it on its next turn, whatever wakes
-# it. One line per sub; the relay drains the file.
+# it. One line per sub; the relay drains the file. The result is reported rather
+# than assumed: on the --brief path the hook reads this state back, and a silent
+# failure there would look like "no spawn happened" and start a second session.
+state_recorded=no
 sid="$(my_session_id)"
-if [ -n "$sid" ]; then
-  mkdir -p "$SUB_STATE_DIR"
+if [ -n "$sid" ] && mkdir -p "$SUB_STATE_DIR" 2>/dev/null; then
   task_line="$(printf '%s' "$body" | tr '\n' ' ' | cut -c1-200)"
-  jq -nc --arg n "$name" --arg p "$pane" --arg m "$model" --arg c "$PWD" \
-        --arg b "$briefing" --arg t "$task_line" --arg o "$origin" \
-        --argjson e "$expect_context" \
-        '{name:$n,pane:$p,model:$m,cwd:$c,briefing:$b,task:$t,origin:$o,expect_context:($e==1)}' \
-    >> "$SUB_STATE_DIR/$sid.jsonl" 2>/dev/null
+  if jq -nc --arg n "$name" --arg p "$pane" --arg m "$model" --arg c "$PWD" \
+           --arg b "$briefing" --arg t "$task_line" --arg o "$origin" \
+           --argjson e "$expect_context" \
+           '{name:$n,pane:$p,model:$m,cwd:$c,briefing:$b,task:$t,origin:$o,expect_context:($e==1)}' \
+       >> "$SUB_STATE_DIR/$sid.jsonl" 2>/dev/null; then
+    state_recorded=yes
+  fi
 fi
+
+# Best effort: the sub's own messaging nickname, so the parent can address it with
+# SendMessage before the sub has written to it. Never fatal — the sub's first
+# report carries the nickname regardless.
+nickname="$(agent_nickname "$name" 2>/dev/null)" || nickname=""
 
 cat <<EOF
 SUB_STARTED
   sub name:   $name
+  nickname:   ${nickname:-unresolved}
   pane:       $pane
   model:      $model
   cwd:        $PWD
   briefing:   $briefing
   reports to: $parent
   awaiting context: $([ "$expect_context" -eq 1 ] && echo yes || echo no)
+  state recorded: $state_recorded
 EOF

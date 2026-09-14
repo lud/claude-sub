@@ -72,6 +72,30 @@ split_direction() {
 
 agent_name_taken() { herdr agent get "$1" >/dev/null 2>&1; }
 
+# The documented contract, enforced: [a-z][a-z0-9_-]{0,31}. A loose check here
+# reaches the filesystem as a briefing path and herdr as a pane, so anything
+# with a dot, a slash or a space must be refused before either happens.
+valid_sub_name() {
+  local n="$1"
+  [ -n "$n" ] && [ "${#n}" -le 32 ] || return 1
+  case "$n" in [a-z]*) ;; *) return 1 ;; esac
+  [ -z "$(printf '%s' "$n" | tr -d 'a-z0-9_-')" ]
+}
+
+# The Claude messaging nickname of an agent we started, resolved through its
+# herdr agent session id. This is what lets the parent address a sub with
+# SendMessage before the sub has ever written to it — so conversation text never
+# has to travel through a shell command line.
+agent_nickname() {
+  local asid f
+  asid="$(herdr agent get "$1" 2>/dev/null \
+    | jq -r '.result.agent.agent_session.value // empty' 2>/dev/null)"
+  [ -n "$asid" ] || return 1
+  f="$(grep -l "\"sessionId\":\"$asid\"" "$CLAUDE_DIR"/sessions/*.json 2>/dev/null | head -1)"
+  [ -n "$f" ] || return 1
+  jq -r '.name // empty' "$f"
+}
+
 # First free sub-N, considering both live agents and leftover briefing files.
 next_sub_name() {
   local i=1 name

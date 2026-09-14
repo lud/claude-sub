@@ -55,7 +55,11 @@ makes sense with context from this conversation: the sub still starts immediatel
 and this session gets one turn to send it that context."
 fi
 
-[ -n "$cwd" ] && cd "$cwd" 2>/dev/null
+# Spawning from a directory other than the one the user invoked from would put
+# the sub in the wrong repository, so a failure here is fatal, not ignorable.
+if [ -n "$cwd" ] && ! cd "$cwd" 2>/dev/null; then
+  block "sub: cannot enter the invocation directory: $cwd"
+fi
 
 set -- --origin hook
 [ -n "$name" ]  && set -- "$@" --name "$name"
@@ -70,14 +74,22 @@ if [ $rc -ne 0 ]; then
   block "$out"
 fi
 
-sub_name="$(printf '%s' "$out" | sed -n 's/^  sub name: *//p' | head -1)"
-pane="$(printf '%s' "$out" | sed -n 's/^  pane: *//p' | head -1)"
-model_used="$(printf '%s' "$out" | sed -n 's/^  model: *//p' | head -1)"
+field() { printf '%s' "$out" | sed -n "s/^  $1: *//p" | head -1; }
+sub_name="$(field 'sub name')"
+pane="$(field 'pane')"
+model_used="$(field 'model')"
+recorded="$(field 'state recorded')"
 
 if [ "$brief" -eq 1 ]; then
-  # Let the expansion through. The command body picks the spawn up from the state
-  # file and spends its turn briefing the sub.
-  exit 0
+  # The command body reads the spawn back out of the state file. If that file was
+  # never written it would read NO_SPAWN and start a second session for the same
+  # task, so an unrecorded spawn is reported to the user here instead.
+  if [ "$recorded" = yes ]; then exit 0; fi
+  block "$sub_name is running in pane $pane on $model_used, but its spawn could not
+be recorded, so this session cannot be handed the context step automatically.
+
+The sub was told to expect a briefing message and is waiting for one. Send it the
+context yourself, or tell this session to brief $sub_name."
 fi
 
 block "$sub_name is running in pane $pane on $model_used.

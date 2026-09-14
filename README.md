@@ -127,6 +127,31 @@ Probed on 2026-09-14, Claude Code 2.1.270 — re-check if a version bump breaks 
 - `CLAUDE_CONFIG_DIR` must be set in the shell (project `settings.json` `env` no
   longer sets it), so hooks inherit it from the session that triggered them.
 
+## Context never travels through a shell
+
+The `--brief` turn sends the sub a message that quotes this conversation and the
+repository, so it will contain backticks, `$(...)`, quotes and backslashes. That
+text goes through `SendMessage`, which takes it as a parameter — there is no shell
+to escape and nothing in it can execute.
+
+This is why `spawn.sh` resolves and prints the sub's own messaging nickname: a
+session's nickname is `.name` in its registry file, found from the herdr agent's
+session id (`herdr agent get <name>` → `.agent_session.value`). Without it the
+parent would have no address for a sub that has not yet written to it, and the
+only remaining channel would be `herdr agent prompt <name> "<text>"` — a shell
+command line built out of repository text. Both the command and the skill say to
+use `SendMessage` and nothing else.
+
+## Testing
+
+```
+test/run.sh
+```
+
+28 assertions over argument parsing, name validation, template rendering and path
+resolution. Nothing spawns a pane: every case runs `--dry-run` against a fixture
+config directory, so the suite touches neither the real `~/.claude` nor herdr.
+
 ## Iterating
 
 `claude plugin install` copies the source into
@@ -139,12 +164,16 @@ claude plugin uninstall sub@claude-sub && claude plugin install sub@claude-sub
 
 Commands and hooks reload on the next session.
 
-## Known rough edge
+## Known rough edges
 
 If the cwd has never been trusted by Claude Code, the new session stops on the
 folder-trust dialog and `herdr agent start` returns `agent_not_ready`. The spawn
 prints `SUB_START_FAILED` with the pane id and leaves the pane open; every path is
 told to surface it to the user rather than answer the dialog for them.
+
+If the spawn cannot be recorded in `.state/`, the `--brief` path blocks with the
+sub's details instead of letting the expansion through: the command body would
+otherwise read `NO_SPAWN` and start a *second* session for the same task.
 
 ## Retired
 
