@@ -1,0 +1,16 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "claude-sub",
+  "owner": {
+    "name": "lud"
+  },
+  "plugins": [
+    {
+      "name": "sub",
+      "description": "Delegate a task to a new interactive Claude Code session in a sibling Herdr pane, in one tool call.",
+      "source": "./plugins/sub",
+      "category": "workflow"
+    }
+  ],
+  "description": "Personal plugins for driving sibling Claude Code sessions in Herdr panes."
+}

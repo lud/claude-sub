@@ -1,0 +1,8 @@
+{
+  "name": "sub",
+  "version": "0.1.0",
+  "description": "Delegate a task to a new interactive Claude Code session in a sibling Herdr pane, addressable by cross-session messages. Spawns the pane, writes the briefing and starts the sub in a single Bash call.",
+  "author": {
+    "name": "lud"
+  }
+}
