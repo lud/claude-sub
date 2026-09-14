@@ -1,7 +1,11 @@
 # shellcheck shell=bash
 # Shared helpers for the sub plugin. Sourced, never executed.
 
-SUB_TASKS_DIR="${SUB_TASKS_DIR:-$HOME/.claude/sub-tasks}"
+# Everything this plugin reads about a session — the nickname registry, the
+# transcript, the settings — lives in Claude Code's config dir, which is
+# CLAUDE_CONFIG_DIR when the user set one in their shell.
+CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+SUB_TASKS_DIR="${SUB_TASKS_DIR:-$CLAUDE_DIR/sub-tasks}"
 SUB_STATE_DIR="$SUB_TASKS_DIR/.state"
 
 die() {
@@ -18,11 +22,11 @@ require_herdr() {
 # The session registry file for this process, keyed by PID.
 session_file() {
   local pid="${CLAUDE_PID:-$PPID}"
-  local f="$HOME/.claude/sessions/$pid.json"
+  local f="$CLAUDE_DIR/sessions/$pid.json"
   if [ -f "$f" ]; then printf '%s' "$f"; return 0; fi
   local sid="${SUB_SESSION_ID:-${CLAUDE_CODE_SESSION_ID:-}}"
   [ -n "$sid" ] || return 1
-  grep -l "\"sessionId\":\"$sid\"" "$HOME"/.claude/sessions/*.json 2>/dev/null | head -1
+  grep -l "\"sessionId\":\"$sid\"" "$CLAUDE_DIR"/sessions/*.json 2>/dev/null | head -1
 }
 
 # Cross-session messaging nickname of this session (the SendMessage address).
@@ -47,13 +51,13 @@ my_model() {
   local sid f m
   sid="$(my_session_id)" || true
   if [ -n "$sid" ]; then
-    f="$(find "$HOME/.claude/projects" -maxdepth 2 -name "$sid.jsonl" 2>/dev/null | head -1)"
+    f="$(find "$CLAUDE_DIR/projects" -maxdepth 2 -name "$sid.jsonl" 2>/dev/null | head -1)"
     if [ -n "$f" ]; then
       m="$(tac "$f" | grep -m1 -o '"model":"[^"]*"' | cut -d'"' -f4 || true)"
       if [ -n "$m" ] && [ "$m" != "<synthetic>" ]; then printf '%s' "$m"; return 0; fi
     fi
   fi
-  jq -r '.model // empty' "$HOME/.claude/settings.json" 2>/dev/null
+  jq -r '.model // empty' "$CLAUDE_DIR/settings.json" 2>/dev/null
 }
 
 # right for a wide pane, down for a narrow or tall one.

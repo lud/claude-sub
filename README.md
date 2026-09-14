@@ -93,9 +93,18 @@ plugins/sub/
   templates/briefing.md    what the sub reads in its first turn
 ```
 
-Briefings are written to `~/.claude/sub-tasks/<sub-name>.md`, named after the sub's
-own agent name so it can find its briefing again after compaction. Pending relay
-notices live in `~/.claude/sub-tasks/.state/<parent-session-id>.jsonl`.
+Briefings are written to `$CLAUDE_CONFIG_DIR/sub-tasks/<sub-name>.md`, named after
+the sub's own agent name so it can find its briefing again after compaction.
+Pending relay notices live in `sub-tasks/.state/<parent-session-id>.jsonl`. Both
+directories are created on first use.
+
+`CLAUDE_CONFIG_DIR` is honoured everywhere, falling back to `~/.claude`: the
+nickname registry, the transcript the model id is read from, `settings.json`, and
+the plugin's own state all follow it. It is also forwarded into the sub's pane
+explicitly — the pane is launched by the herdr server rather than by the parent
+session, so nothing of the parent's environment reaches it otherwise, and a sub
+reading a different config dir than the parent wrote to would not find its own
+nickname. Set `SUB_TASKS_DIR` to move just the plugin's files elsewhere.
 
 ## Facts this relies on
 
@@ -110,11 +119,13 @@ Probed on 2026-09-14, Claude Code 2.1.270 — re-check if a version bump breaks 
   shows the reason to the user; the model gets no turn. Exit 2 also blocks, with
   stderr as the reason.
 - Hooks inherit the session's environment, including `HERDR_PANE_ID`.
-- A session's messaging nickname is `.name` in `~/.claude/sessions/<pid>.json`,
+- A session's messaging nickname is `.name` in `<config-dir>/sessions/<pid>.json`,
   and `$CLAUDE_PID` identifies the file — so the parent's address is readable from
   a script, with no `ListAgents` call.
 - The session's exact model id is the last `"model"` recorded in its transcript at
-  `~/.claude/projects/*/<session-id>.jsonl`.
+  `<config-dir>/projects/*/<session-id>.jsonl`.
+- `CLAUDE_CONFIG_DIR` must be set in the shell (project `settings.json` `env` no
+  longer sets it), so hooks inherit it from the session that triggered them.
 
 ## Iterating
 

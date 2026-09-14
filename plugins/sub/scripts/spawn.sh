@@ -85,9 +85,14 @@ fi
 
 cp "$tmp" "$briefing" || die "failed to write $briefing"
 
+# The pane is launched by the herdr server, not by this session, so nothing of
+# ours reaches it except what is passed here. CLAUDE_CONFIG_DIR is forwarded when
+# set: without it the sub would read a different registry than the parent wrote to.
+split_env=(--env "SUB_BRIEFING=$briefing" --env "SUB_PARENT=$parent" --env "SUB_NAME=$name")
+[ -n "${CLAUDE_CONFIG_DIR:-}" ] && split_env+=(--env "CLAUDE_CONFIG_DIR=$CLAUDE_CONFIG_DIR")
+
 split="$(herdr pane split --pane "$HERDR_PANE_ID" --direction "$direction" \
-  --cwd "$PWD" --no-focus \
-  --env "SUB_BRIEFING=$briefing" --env "SUB_PARENT=$parent" --env "SUB_NAME=$name" 2>&1)"
+  --cwd "$PWD" --no-focus "${split_env[@]}" 2>&1)"
 pane="$(printf '%s' "$split" | jq -r '.result.pane.pane_id // empty' 2>/dev/null)"
 [ -n "$pane" ] || die "pane split failed: $split"
 
