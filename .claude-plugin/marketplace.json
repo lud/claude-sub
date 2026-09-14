@@ -7,7 +7,7 @@
   "plugins": [
     {
       "name": "sub",
-      "description": "Delegate a task to a new interactive Claude Code session in a sibling Herdr pane, in one tool call.",
+      "description": "Delegate a task to a new interactive Claude Code session in a sibling Herdr pane, without spending a model turn.",
       "source": "./plugins/sub",
       "category": "workflow"
     }

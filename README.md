@@ -4,88 +4,141 @@ A Claude Code plugin for delegating a task to a **new interactive Claude Code
 session** in a sibling [Herdr](https://herdr.dev) pane — one you can talk to
 directly, unlike a subagent.
 
-It replaces a hand-driven skill that cost five tool calls and a message round-trip
-per delegation. `/sub` now costs **one** tool call and **zero** messages until the
-sub actually has something to report.
+It replaces a hand-driven skill that cost five tool calls and a message
+round-trip per delegation. `/sub:spawn` now costs the parent **no model turn at
+all**: a `UserPromptExpansion` hook intercepts the command, does the whole spawn,
+and blocks the expansion. The sub is already reading its briefing before the
+parent would have finished reading its instructions.
 
 ## Install
 
 ```
-/plugin marketplace add ~/src/claude-sub
-/plugin install sub@claude-sub
+claude plugin marketplace add ~/src/claude-sub
+claude plugin install sub@claude-sub
 ```
 
-## Commands
+## The three ways a sub gets started
 
-### `/sub [--model <model-id>] <task prompt>`
+| | who starts it | parent turns |
+|---|---|---|
+| `/sub:spawn <task>` | the user | **0** |
+| `/sub:spawn --brief <task>` | the user | 1, spent entirely on briefing the sub |
+| the `delegate` skill | the parent, on its own initiative | 1 |
 
-Run in the parent session. A pre-run resolves the parent's messaging nickname,
-exact model id, cwd, pane geometry and a free sub name before the model thinks, so
-the model makes a single Bash call that writes the briefing, splits the pane and
-starts the session.
+All three funnel through `scripts/spawn.sh`, which is the only place a sub is ever
+created.
 
-`--model` is optional; without it the sub inherits the parent's exact model id,
-read from the parent's own transcript.
+### `/sub:spawn [--brief] [--model <id>] [--name <id>] <task>`
 
-### `/sub-report [<parent-nickname>]`
+Without `--brief`: the hook spawns and blocks. The task text is the briefing,
+verbatim. The parent never runs — it finds out on its next turn, from the relay.
 
-Run in the sub's pane. Resolves the parent from the pane environment (`SUB_PARENT`,
-`SUB_BRIEFING`, `SUB_NAME`, injected at split time) and sends a fresh update.
+With `--brief`: the sub **still starts immediately**, and the only difference is
+that the expansion is let through, so the parent gets one turn whose whole job is
+to send the sub the context this conversation holds and a one-line prompt could
+not carry. The sub's briefing carries a notice telling it exactly that, so it
+orients itself but holds off on committing to an approach until the message lands.
+
+Use `--brief` whenever the task leans on the conversation — "tidy the parser
+module" means nothing to a session that has never seen it.
+
+### The `delegate` skill
+
+The hook can only fire on something the *user* types, so it would have taken away
+the parent's ability to spawn subs on its own. The skill restores it: the parent
+loads it when asked to hand work off, and spawns one sub per Bash call — which is
+also the path that produces the richest briefing, since the model writes the whole
+thing up front.
 
 ## How the parent learns things
 
-- **That the sub started** — synchronously, in the same turn: the spawn script's
-  `SUB_STARTED` output. There is no ack message, because there is nothing an ack
-  would prove that the script has not already proved.
-- **That the sub finished** — one cross-session message from the sub. This one does
-  wake the parent, deliberately: the user may type nothing after `/sub`, and the
-  sub's report is then the only thing that can advance the parent's turn.
+- **That a sub started** — on its next turn, from the `UserPromptSubmit` relay,
+  which drains one note per sub and then forgets them. Not a wake-up, not a
+  message: a chunk of context added to a turn that was going to happen anyway.
+- **That a sub finished** — one cross-session message from the sub. This one does
+  wake the parent, deliberately: the user may type nothing after `/sub:spawn`, and
+  the sub's report is then the only thing that can advance the parent's turn.
 
-The parent is told not to reply to that report unless it has something new to say.
+Subs open their report by naming themselves and their task, because a parent that
+spent zero turns spawning them has no memory of doing so.
+
+There is no ack. The spawn is synchronous and its result is known before anything
+else happens, so an ack would prove nothing that is not already proven — it would
+just be a wake-up and two wasted turns.
+
+## Layering
+
+Every automatic path degrades to a working manual one:
+
+- Hook cannot run (older CLI, hooks disabled by policy) → the command expands, its
+  pre-run reports `NO_SPAWN`, and the body spawns the sub through the same script.
+- Relay never fires → the parent still learns everything from the sub's report.
+- `herdr` or `jq` missing, or `HERDR_ENV != 1` → the spawn refuses with a reason
+  rather than half-starting something.
 
 ## Layout
 
 ```
 plugins/sub/
-  commands/sub.md          /sub          — pre-run facts + one-call spawn
-  commands/sub-report.md   /sub-report   — update from the sub's pane
+  commands/spawn.md        /sub:spawn  — the --brief turn, and the no-hook fallback
+  commands/report.md       /sub:report — update from the sub's pane
+  skills/delegate/         parent-initiated spawning
+  hooks/hooks.json         UserPromptExpansion (zero-turn) + UserPromptSubmit (relay)
+  scripts/spawn.sh         the only place a sub is created
+  scripts/spawn-hook.sh    zero-turn entry point
+  scripts/relay.sh         next-turn notice, drained once
+  scripts/last-spawn.sh    pre-run for the --brief turn
+  scripts/parent.sh        pre-run for /sub:report
   scripts/lib.sh           nickname, model, geometry, name allocation
-  scripts/sub-facts.sh     read-only pre-run for /sub
-  scripts/sub-spawn.sh     briefing + pane split + agent start
-  scripts/sub-parent.sh    read-only pre-run for /sub-report
   templates/briefing.md    what the sub reads in its first turn
 ```
 
-Briefings are written to `~/.claude/sub-tasks/<sub-name>.md`. The path is derived
-from the sub's own agent name, so the sub can find it again after compaction.
+Briefings are written to `~/.claude/sub-tasks/<sub-name>.md`, named after the sub's
+own agent name so it can find its briefing again after compaction. Pending relay
+notices live in `~/.claude/sub-tasks/.state/<parent-session-id>.jsonl`.
 
-## Requirements
+## Facts this relies on
 
-`HERDR_ENV=1`, plus `herdr` and `jq` on `PATH`.
+Probed on 2026-09-14, Claude Code 2.1.270 — re-check if a version bump breaks it:
 
-## Iterating on the plugin
+- `UserPromptExpansion` fires for slash commands with `command_name` (namespaced,
+  e.g. `sub:spawn`), `command_args`, `cwd` and `session_id`, and its matcher is a
+  regex over the command name.
+- It runs **before** the command body's `!` pre-runs, which is what lets the
+  `--brief` turn read the spawn the hook just performed.
+- `{"decision":"block","reason":…}` on stdout with exit 0 stops the expansion and
+  shows the reason to the user; the model gets no turn. Exit 2 also blocks, with
+  stderr as the reason.
+- Hooks inherit the session's environment, including `HERDR_PANE_ID`.
+- A session's messaging nickname is `.name` in `~/.claude/sessions/<pid>.json`,
+  and `$CLAUDE_PID` identifies the file — so the parent's address is readable from
+  a script, with no `ListAgents` call.
+- The session's exact model id is the last `"model"` recorded in its transcript at
+  `~/.claude/projects/*/<session-id>.jsonl`.
+
+## Iterating
 
 `claude plugin install` copies the source into
-`~/.claude/plugins/cache/claude-sub/sub/<version>/`, so edits here are not picked
-up live. After changing anything:
+`~/.claude/plugins/cache/claude-sub/sub/<version>/`, so edits here are not live:
 
 ```
 claude plugin marketplace update claude-sub
 claude plugin uninstall sub@claude-sub && claude plugin install sub@claude-sub
 ```
 
-Commands reload on the next session.
+Commands and hooks reload on the next session.
 
 ## Known rough edge
 
 If the cwd has never been trusted by Claude Code, the new session stops on the
 folder-trust dialog and `herdr agent start` returns `agent_not_ready`. The spawn
-script prints `SUB_START_FAILED` with the pane id and leaves the pane open; the
-model is told to surface it to the user rather than answer the dialog for them.
+prints `SUB_START_FAILED` with the pane id and leaves the pane open; every path is
+told to surface it to the user rather than answer the dialog for them.
 
 ## Retired
 
 This replaces the `sub`, `sub-worker` and `sub-report` skills that used to live in
-`~/.claude/skills/`. The `sub-worker` bootstrap is gone entirely — its protocol is
-now rendered into each briefing by `templates/briefing.md`, so the sub needs no
-skill lookup and there is no plugin-namespace ambiguity in the spawn command.
+`~/.claude/skills/` (backed up under `~/.claude/backups/`). The `sub-worker`
+bootstrap is gone entirely — its protocol is rendered into each briefing by
+`templates/briefing.md`, so the sub needs no skill lookup and the spawn command
+carries no plugin-namespace ambiguity.

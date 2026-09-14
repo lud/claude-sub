@@ -1,0 +1,31 @@
+{
+  "description": "Zero-turn /sub:spawn, and the next-turn relay that tells the parent what it started.",
+  "hooks": {
+    "UserPromptExpansion": [
+      {
+        "matcher": "^sub:spawn$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/spawn-hook.sh\"",
+            "async": false,
+            "timeout": 120,
+            "statusMessage": "Starting the sub session"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/relay.sh\"",
+            "async": false,
+            "timeout": 15
+          }
+        ]
+      }
+    ]
+  }
+}

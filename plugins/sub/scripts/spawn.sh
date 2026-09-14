@@ -1,0 +1,135 @@
+#!/usr/bin/env bash
+# Writes the briefing, splits a pane, starts the sub session, records the spawn
+# for the parent's relay. The briefing body (task + context) comes from stdin.
+#
+# This is the one place a sub is ever created. The zero-turn hook, the /sub:spawn
+# command and the delegate skill all funnel through here.
+set -uo pipefail
+here="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=lib.sh
+. "$here/lib.sh"
+
+name=""; model=""; direction=""; force=0; dry=0; expect_context=0; origin="skill"
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --name)           name="${2:-}"; shift 2 ;;
+    --model)          model="${2:-}"; shift 2 ;;
+    --direction)      direction="${2:-}"; shift 2 ;;
+    --origin)         origin="${2:-}"; shift 2 ;;
+    --expect-context) expect_context=1; shift ;;
+    --force)          force=1; shift ;;
+    --dry-run)        dry=1; shift ;;
+    *) die "unknown argument: $1" ;;
+  esac
+done
+
+require_herdr
+
+body="$(cat)"
+[ -n "${body//[[:space:]]/}" ] || die "empty briefing body — nothing to delegate"
+
+parent="$(my_nickname)"
+[ -n "$parent" ] || die "could not resolve this session's messaging nickname"
+[ -n "$name" ] || name="$(next_sub_name)"
+case "$name" in
+  [a-z]*) ;;
+  *) die "sub name must match [a-z][a-z0-9_-]{0,31}: $name" ;;
+esac
+[ -n "$model" ] || model="$(my_model)"
+[ -n "$model" ] || die "could not resolve a model id; pass --model"
+[ -n "$direction" ] || direction="$(split_direction)"
+
+mkdir -p "$SUB_TASKS_DIR"
+briefing="$SUB_TASKS_DIR/$name.md"
+if [ -e "$briefing" ] && [ "$force" -ne 1 ]; then
+  die "briefing already exists: $briefing (pick another --name, or pass --force)"
+fi
+if agent_name_taken "$name" && [ "$force" -ne 1 ]; then
+  die "agent name already live: $name (pick another --name)"
+fi
+
+# The amendment notice only makes sense while the parent still owes context.
+amendment=""
+if [ "$expect_context" -eq 1 ]; then
+  amendment="> **Context is still coming.** \`$parent\` started you from a one-line
+> instruction and is composing the rest right now. It will arrive within a minute
+> as a cross-session message. Get oriented — read what you need to read — but do
+> not commit to an approach or start editing until it lands. If it contradicts
+> anything below, it wins."
+fi
+
+tmp="$(mktemp)"; trap 'rm -f "$tmp"' EXIT
+BODY="$body" PARENT="$parent" CWD="$PWD" SUB_NAME="$name" BRIEFING_PATH="$briefing" \
+AMENDMENT="$amendment" \
+  awk '
+    { line = $0
+      gsub(/\{\{PARENT\}\}/,        ENVIRON["PARENT"],        line)
+      gsub(/\{\{CWD\}\}/,           ENVIRON["CWD"],           line)
+      gsub(/\{\{SUB_NAME\}\}/,      ENVIRON["SUB_NAME"],      line)
+      gsub(/\{\{BRIEFING_PATH\}\}/, ENVIRON["BRIEFING_PATH"], line)
+      if (line == "{{BODY}}") { print ENVIRON["BODY"]; next }
+      if (line == "{{AMENDMENT}}") {
+        if (ENVIRON["AMENDMENT"] != "") print ENVIRON["AMENDMENT"] "\n"
+        next
+      }
+      print line
+    }
+  ' "$here/../templates/briefing.md" > "$tmp" || die "failed to render briefing"
+
+if [ "$dry" -eq 1 ]; then
+  echo "--- would write $briefing ---"; cat "$tmp"
+  echo "--- would split $direction from ${HERDR_PANE_ID:-?} and start $name on $model ---"
+  exit 0
+fi
+
+cp "$tmp" "$briefing" || die "failed to write $briefing"
+
+split="$(herdr pane split --pane "$HERDR_PANE_ID" --direction "$direction" \
+  --cwd "$PWD" --no-focus \
+  --env "SUB_BRIEFING=$briefing" --env "SUB_PARENT=$parent" --env "SUB_NAME=$name" 2>&1)"
+pane="$(printf '%s' "$split" | jq -r '.result.pane.pane_id // empty' 2>/dev/null)"
+[ -n "$pane" ] || die "pane split failed: $split"
+
+start="$(herdr agent start "$name" --kind claude --pane "$pane" --timeout 90000 \
+  -- --model "$model" "@$briefing" 2>&1)"
+if ! printf '%s' "$start" | jq -e '.result' >/dev/null 2>&1; then
+  cat <<EOF
+SUB_START_FAILED
+  sub name:  $name
+  pane:      $pane
+  model:     $model
+  briefing:  $briefing
+  herdr said: $start
+
+The pane exists and the briefing is written, but the session never reached a
+prompt. The usual cause is Claude Code's folder-trust dialog for a cwd that has
+never been accepted — that is the user's decision to make, not the model's.
+Inspect with: herdr agent read $name --source recent-unwrapped --lines 60
+EOF
+  exit 1
+fi
+
+# Record the spawn so the parent learns about it on its next turn, whatever wakes
+# it. One line per sub; the relay drains the file.
+sid="$(my_session_id)"
+if [ -n "$sid" ]; then
+  mkdir -p "$SUB_STATE_DIR"
+  task_line="$(printf '%s' "$body" | tr '\n' ' ' | cut -c1-200)"
+  jq -nc --arg n "$name" --arg p "$pane" --arg m "$model" --arg c "$PWD" \
+        --arg b "$briefing" --arg t "$task_line" --arg o "$origin" \
+        --argjson e "$expect_context" \
+        '{name:$n,pane:$p,model:$m,cwd:$c,briefing:$b,task:$t,origin:$o,expect_context:($e==1)}' \
+    >> "$SUB_STATE_DIR/$sid.jsonl" 2>/dev/null
+fi
+
+cat <<EOF
+SUB_STARTED
+  sub name:   $name
+  pane:       $pane
+  model:      $model
+  cwd:        $PWD
+  briefing:   $briefing
+  reports to: $parent
+  awaiting context: $([ "$expect_context" -eq 1 ] && echo yes || echo no)
+EOF
