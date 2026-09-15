@@ -57,12 +57,18 @@ report="$(printf '%s' "$merged" | jq -r '.[] | select(.resolved)' 2>/dev/null)"
 
 lines="$(printf '%s' "$report" | jq -sr '.[] |
   if .status == "failed" then
-    "- \(.name) — FAILED TO START in pane \(.pane // "?")\n  task: \(.task // "?")\n  It never reached a prompt; the pane is still open. Usually the folder-trust dialog for \(.cwd // "its directory"). Tell the user — do not answer it for them, and do not re-spawn."
+    "- \(.name) — FAILED TO START in pane \(.pane // "?")\n  task: \(.task // "?")\n  No agent ever appeared in the pane, which is still open. Usually the folder-trust dialog for \(.cwd // "its directory"). Tell the user — do not answer it for them, and do not re-spawn."
   else
     "- \(.name) — pane \(.pane // "?"), model \(.model // "?"), cwd \(.cwd // "?")" +
     (if .nickname then "\n  address: \(.nickname)" else "" end) +
     "\n  task: \(.task // "?")" +
-    (if .status == "starting" then "\n  Its start was never confirmed. Check the pane before assuming it is working." else "" end)
+    (if .status == "blocked" then
+       "\n  It is running, but waiting at a dialog in its pane — folder trust, or a permission request — so it has not started the task yet. Tell the user which pane to answer; do not answer it for them, and do not re-spawn."
+     elif .status == "starting" then
+       "\n  Its start was never confirmed. Check the pane before assuming it is working."
+     elif .ready == false then
+       "\n  herdr never saw it reach an idle prompt, which is what a session already working on its briefing looks like. It is alive — do not report it as failed."
+     else "" end)
   end
 ' 2>/dev/null)"
 [ -n "$lines" ] || exit 0

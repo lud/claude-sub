@@ -73,9 +73,15 @@ relay hands the parent its messaging address, so the parent can fill it in with
 Subs open their report by naming themselves and their task, because a parent that
 spent zero turns spawning them has no memory of doing so.
 
-- **That a sub failed to start** — through the relay like any other outcome, plus
-  a herdr notification at the moment it happens, since a folder-trust dialog is
-  the user's to answer and waiting for their next prompt to mention it is too late.
+- **That a sub is waiting at a dialog** — through the relay, plus a herdr
+  notification at the moment it happens, since a folder-trust or permission dialog
+  is the user's to answer and waiting for their next prompt to mention it is too
+  late. The sub is running; it just has not read its briefing yet.
+- **That a sub failed to start** — the same two ways, and only when no agent ever
+  appeared in the pane at all. `herdr agent start` saying `agent_not_ready` is not
+  that: it reports whether the pane is at an idle prompt, and a sub that went
+  straight to work on its queued briefing is not at one either. The pane is asked
+  directly before anything is called a failure.
 
 There is no ack. The pane and the briefing are proven before the prompt comes
 back, and the boot that follows reports itself, so an ack would prove nothing that
@@ -90,6 +96,11 @@ Every automatic path degrades to a working manual one:
 - Detached finisher dies before recording an outcome → the spawn record stays in
   `.state/` and the relay reports it as unconfirmed once it is three minutes old,
   rather than holding it forever or claiming a session that is not there.
+- `herdr agent start` never sees an idle prompt → the pane decides. A live agent
+  there is a running sub, reported as started with the readiness left unconfirmed;
+  only an empty pane is a failure. The name the start never registered is applied
+  to the pane agent afterwards, so `/sub:report` and `herdr agent read` still
+  resolve it.
 - Relay and finisher write `.state/` concurrently → the relay claims the file by
   rename, and records are merged by name with outcomes sorted last, so an
   in-flight record restored after an outcome already landed cannot mask it.
@@ -147,10 +158,20 @@ Probed on 2026-09-14, Claude Code 2.1.270 — re-check if a version bump breaks 
 - `CLAUDE_CONFIG_DIR` must be set in the shell (project `settings.json` `env` no
   longer sets it), so hooks inherit it from the session that triggered them.
 - `herdr agent start` has no no-wait mode — `--timeout` only caps the wait — and
-  it returns on interactivity whether or not an initial `@briefing` is queued.
-  Measured between 4.4s and 12.5s across runs on one machine — Claude Code's boot
-  is variable, which is the case for never waiting on it. Every other herdr call
-  is 2-4ms.
+  what it waits for is an idle prompt ready for input. Measured between 4.4s and
+  12.5s across runs on one machine — Claude Code's boot is variable, which is the
+  case for never waiting on it. Every other herdr call is 2-4ms.
+- A start that does not reach that prompt returns `agent_not_ready` and registers
+  no name: `herdr agent get <name>` then answers `agent_not_found` for a session
+  that is running. A sub is started with `@briefing` already queued, so going
+  straight to work looks exactly like never coming up — observed on 2026-09-15,
+  twice, on subs that went on to complete their task and report.
+- `herdr agent get <pane-id>` answers for the agent in a pane whether or not it
+  ever took a name, with `agent_status` and `agent_session.value`. That is what
+  separates a running sub from an empty pane, and `herdr agent rename <pane-id>
+  <name>` gives the name back afterwards.
+- `agent_status` is `blocked` while the session sits at a dialog, which is the one
+  case where the user has to act.
 - The expansion hook cannot be marked `async`: an async hook is fire-and-forget,
   so its `decision` is not read, and the block is what buys the zero turn. The
   asynchrony therefore lives one level down: `spawn.sh` detaches the boot.
@@ -182,10 +203,11 @@ command and the skill both say to use `SendMessage` and nothing else.
 test/run.sh
 ```
 
-53 assertions over argument parsing, name validation, template rendering, path
-resolution and relay record merging. Nothing spawns a pane: every case runs
-`--dry-run` against a fixture config directory, so the suite touches neither the
-real `~/.claude` nor herdr.
+74 assertions over argument parsing, name validation, template rendering, path
+resolution, relay record merging and how a start that never reports ready is
+classified. Nothing spawns a pane: every case runs
+`--dry-run` against a fixture config directory, or the finisher against a `herdr`
+stub on `PATH`, so the suite touches neither the real `~/.claude` nor herdr.
 
 The suite unsets `SUB_TASKS_DIR` and the session-id variables before it starts. A
 session that exports them — anything started by `/sub:spawn` — would otherwise
@@ -209,10 +231,11 @@ Commands and hooks reload on the next session.
 ## Known rough edges
 
 If the cwd has never been trusted by Claude Code, the new session stops on the
-folder-trust dialog and `herdr agent start` returns `agent_not_ready`. The pane is
-left open; every path is told to surface it to the user rather than answer the
-dialog for them. Detached, this surfaces as a herdr notification at the time and
-through the relay on the next turn; inline, as `SUB_START_FAILED` on stdout.
+folder-trust dialog. The pane reads back as `blocked`, and every path is told to
+surface it to the user rather than answer the dialog for them: a herdr
+notification at the time, and the relay on the next turn. A pane where no agent
+ever appeared is the failure case, and only then does anything say
+`SUB_START_FAILED`.
 
 A sub started by `/sub:spawn` has only its one line of task text. That is the
 design, not an oversight — but it does mean a task phrased against the

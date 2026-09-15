@@ -72,6 +72,14 @@ split_direction() {
 
 agent_name_taken() { herdr agent get "$1" >/dev/null 2>&1; }
 
+# What herdr sees in a pane, whatever the start concluded. `agent get` takes a
+# pane id as a target and answers for an agent that never took a name, which is
+# the only way to tell a session that never came up from one that came up and
+# went straight to work — `agent start` reports both as `agent_not_ready`.
+pane_agent() { # pane_agent <pane-id>
+  herdr agent get "$1" 2>/dev/null | jq -c '.result.agent // empty' 2>/dev/null
+}
+
 # The documented contract, enforced: [a-z][a-z0-9_-]{0,31}. A loose check here
 # reaches the filesystem as a briefing path and herdr as a pane, so anything
 # with a dot, a slash or a space must be refused before either happens.

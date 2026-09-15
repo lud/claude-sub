@@ -96,7 +96,11 @@ as a parameter and has no shell to escape.
 
 ## When it fails
 
-A sub that never reaches a prompt is reported by the relay as `FAILED TO START`,
-and the user gets a herdr notification at the moment it happens. That is almost
-always Claude Code's folder-trust dialog for a cwd the user has never accepted —
-their decision. Tell them which pane is waiting; do not answer it for them.
+`FAILED TO START` from the relay means no agent ever appeared in the pane, and the
+user gets a herdr notification at the moment it happens. Same for a sub reported
+as waiting at a dialog — folder trust for a cwd they never accepted, or a
+permission request. Both are their decision: tell them which pane is waiting, do
+not answer it for them, and do not spawn a replacement.
+
+A sub reported as started but never seen at an idle prompt is neither of those.
+It is running, most likely already working on its briefing. Take it as started.

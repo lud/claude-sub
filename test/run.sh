@@ -175,5 +175,81 @@ check "pre-run takes the address from the outcome" "sub_nickname: claude-h-9" "$
 : >| "$state/test-session.jsonl"
 check "no spawn recorded reports NO_SPAWN" "NO_SPAWN" "$(lrun bash "$lastspawn")"
 
+echo "a start that never reports ready"
+# `herdr agent start` reports one thing: whether the pane is at an idle prompt.
+# A sub whose briefing is already queued can go straight to work and never show
+# one, and then a live session comes back as `agent_not_ready`. Reporting that as
+# a failed start told a parent its sub was dead while it was answering the task.
+fin="$root/plugins/sub/scripts/finish-spawn.sh"
+mkdir -p "$fixture/bin"
+cat > "$fixture/bin/herdr" <<'STUB'
+#!/usr/bin/env bash
+# Stand-in for herdr: the calls the finisher makes, answered from STUB_*.
+printf '%s\n' "$*" >> "${STUB_LOG:-/dev/null}"
+case "$1 $2" in
+  "agent start")
+    if [ "${STUB_START:-ok}" = ok ]; then echo '{"result":{"agent":{"name":"stub"}}}'
+    else echo '{"error":{"code":"agent_not_ready","message":"blocked during startup"}}'; fi ;;
+  "agent get")
+    if [ "${STUB_AGENT:-idle}" = none ]; then echo '{"error":{"code":"agent_not_found"}}'
+    else jq -nc --arg s "${STUB_AGENT:-idle}" --arg n "${STUB_AGENT_NAME:-}" \
+      '{result:{agent:{name:(if $n == "" then null else $n end),agent_status:$s,
+                       agent_session:{value:"sub-session"}}}}'; fi ;;
+  *) echo '{"result":{}}' ;;
+esac
+STUB
+chmod +x "$fixture/bin/herdr"
+cat > "$fixture/sessions/9999.json" <<JSON
+{"pid":9999,"sessionId":"sub-session","name":"claude-sub-9z","cwd":"/tmp"}
+JSON
+fstate="$state/finish-session.jsonl"
+flog="$fixture/stub.log"
+frun() { # frun <sub-name> <start: ok|not_ready> <pane agent: none|idle|blocked>
+  rm -f "$fstate" "$flog"
+  CLAUDE_CONFIG_DIR="$fixture" SUB_TASKS_DIR="$fixture/sub-tasks" \
+  PATH="$fixture/bin:$PATH" SUB_PROBE_SECONDS=0 STUB_LOG="$flog" \
+  STUB_START="$2" STUB_AGENT="$3" \
+  SUB_F_NAME="$1" SUB_F_PANE="w9:p9" SUB_F_MODEL="m" SUB_F_BRIEFING="/b.md" \
+  SUB_F_SID="finish-session" SUB_F_PARENT="test-parent" SUB_F_DETACHED=1 \
+  bash "$fin" 2>&1
+}
+
+out="$(frun sub-ok ok idle)"
+check "a ready start is a start" "SUB_STARTED" "$out"
+check "a ready start resolves the address" "claude-sub-9z" "$out"
+check "a ready start records it" '"status":"started"' "$(cat "$fstate")"
+check "a ready start records readiness" '"ready":true' "$(cat "$fstate")"
+
+out="$(frun sub-busy not_ready idle)"
+check "an unready live pane is not a failure" "SUB_STARTED" "$out"
+check "an unready live pane says why it is unconfirmed" "never saw it reach an idle prompt" "$out"
+check "an unready live pane is recorded as started" '"status":"started"' "$(cat "$fstate")"
+check "an unready live pane is recorded as unready" '"ready":false' "$(cat "$fstate")"
+check "an unready live pane still resolves the address" "claude-sub-9z" "$out"
+check "an unnamed agent is named after the sub" "agent rename w9:p9 sub-busy" "$(cat "$flog")"
+case "$(cat "$flog")" in *"notification show"*)
+  bad "a live sub raises no failure notification" "the finisher notified anyway" ;;
+  *) ok "a live sub raises no failure notification" ;;
+esac
+
+out="$(frun sub-dlg not_ready blocked)"
+check "a blocked pane is reported as blocked" '"status":"blocked"' "$(cat "$fstate")"
+check "a blocked pane names the dialog" "waiting at a dialog" "$out"
+check "a blocked pane notifies the user" "waiting at a dialog" "$(cat "$flog")"
+
+out="$(frun sub-dead not_ready none)"
+check "an empty pane is still a failure" "SUB_START_FAILED" "$out"
+check "an empty pane records the failure" '"status":"failed"' "$(cat "$fstate")"
+check "a real failure notifies the user" "failed to start" "$(cat "$flog")"
+check "a real failure points at the pane, not the unregistered name" "agent read w9:p9" "$out"
+
+seed '{"name":"sub-u","status":"started","ready":false,"nickname":"claude-u-1"}' "$(spawned sub-u)"
+out="$(printf '%s' "$rpay" | run bash "$relay")"
+check "the relay does not call an unready sub failed" "do not report it as failed" "$out"
+check "the relay still hands over its address" "address: claude-u-1" "$out"
+seed '{"name":"sub-v","status":"blocked","nickname":"claude-v-1"}' "$(spawned sub-v)"
+check "the relay sends the user to the dialog" "waiting at a dialog in its pane" \
+  "$(printf '%s' "$rpay" | run bash "$relay")"
+
 printf '\n%s passed, %s failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
