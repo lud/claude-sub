@@ -108,3 +108,41 @@ next_sub_name() {
   done
   printf 'sub-%s' "$$"
 }
+
+# How the two writers' records are folded back into one per sub.
+#
+# A sub's record arrives in two pieces: the spawn writes what it knows, the
+# detached finisher appends the outcome. Merging them in file order is wrong,
+# because the relay can restore a claimed `starting` record *after* the finisher
+# has already appended its outcome to the fresh file — a window of a few
+# milliseconds that lines up with exactly when someone types after a spawn. The
+# stale record would then win, and the sub would be reported as never confirmed
+# while it was in fact running. Sorting outcomes last makes the merge independent
+# of how the lines landed.
+SUB_MERGE_BY_NAME='group_by(.name) | map(sort_by(.status == "starting" | not) | add)'
+
+# Append one record to this session's relay state. Records accumulate per sub —
+# the spawn writes what it knows, the finisher writes the outcome later — and the
+# relay merges them by name, so a later line carries only the fields it changes.
+record_state() { # record_state <session-id> <json-object>
+  local sid="$1" json="$2"
+  [ -n "$sid" ] || return 1
+  [ -n "$json" ] || return 1
+  mkdir -p "$SUB_STATE_DIR" 2>/dev/null || return 1
+  printf '%s\n' "$json" >> "$SUB_STATE_DIR/$sid.jsonl" 2>/dev/null
+}
+
+# Phase timings, written only when SUB_PROFILE=1. The spawn's cost is dominated by
+# one blocking call and the rest is noise, so attributing a slow spawn needs the
+# boundaries recorded where it actually ran rather than re-measured from a shell.
+prof() { # prof <phase-label>
+  [ "${SUB_PROFILE:-}" = 1 ] || return 0
+  local now
+  now="$(date +%s.%N)"
+  : "${SUB_PROF_T0:=$now}"
+  mkdir -p "$SUB_STATE_DIR" 2>/dev/null || return 0
+  awk -v t="$now" -v z="$SUB_PROF_T0" -v l="$1" -v p="$$" \
+    'BEGIN { printf "%s pid=%s %8.3fs  %s\n", strftime("%H:%M:%S"), p, t - z, l }' \
+    >> "$SUB_STATE_DIR/profile.log" 2>/dev/null
+  export SUB_PROF_T0="$SUB_PROF_T0"
+}

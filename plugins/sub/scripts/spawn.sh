@@ -3,13 +3,19 @@
 # for the parent's relay. The briefing body (task + context) comes from stdin.
 #
 # This is the one place a sub is ever created. The zero-turn hook, the /sub:spawn
-# command and the delegate skill all funnel through here.
+# fallback body and the delegate skill all funnel through here.
+#
+# Everything here is milliseconds except `herdr agent start`, which blocks for as
+# long as Claude Code takes to boot — measured between 4.4s and 12.5s on the same
+# machine. That call lives in finish-spawn.sh and is detached by default: no
+# caller needs its result, because the briefing is complete before the pane is
+# split and the relay reports the outcome either way. --wait runs it inline.
 set -uo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=lib.sh
 . "$here/lib.sh"
 
-name=""; model=""; direction=""; force=0; dry=0; expect_context=0; origin="skill"
+name=""; model=""; direction=""; force=0; dry=0; origin="skill"; detach=1
 
 # Every value-taking option is checked before the shift: `shift 2` on a lone
 # trailing flag fails, leaves the arguments untouched, and spins forever.
@@ -17,17 +23,18 @@ need_value() { [ "$2" -ge 2 ] || die "$1 requires a value"; }
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --name)           need_value --name "$#";      name="$2"; shift 2 ;;
-    --model)          need_value --model "$#";     model="$2"; shift 2 ;;
-    --direction)      need_value --direction "$#"; direction="$2"; shift 2 ;;
-    --origin)         need_value --origin "$#";    origin="$2"; shift 2 ;;
-    --expect-context) expect_context=1; shift ;;
-    --force)          force=1; shift ;;
-    --dry-run)        dry=1; shift ;;
+    --name)      need_value --name "$#";      name="$2"; shift 2 ;;
+    --model)     need_value --model "$#";     model="$2"; shift 2 ;;
+    --direction) need_value --direction "$#"; direction="$2"; shift 2 ;;
+    --origin)    need_value --origin "$#";    origin="$2"; shift 2 ;;
+    --wait)      detach=0; shift ;;
+    --force)     force=1; shift ;;
+    --dry-run)   dry=1; shift ;;
     *) die "unknown argument: $1" ;;
   esac
 done
 
+prof "spawn: parsed arguments"
 require_herdr
 
 body="$(cat)"
@@ -40,6 +47,7 @@ valid_sub_name "$name" || die "sub name must match [a-z][a-z0-9_-]{0,31}: $name"
 [ -n "$model" ] || model="$(my_model)"
 [ -n "$model" ] || die "could not resolve a model id; pass --model"
 [ -n "$direction" ] || direction="$(split_direction)"
+prof "spawn: resolved nickname, name, model, direction"
 
 mkdir -p "$SUB_TASKS_DIR"
 briefing="$SUB_TASKS_DIR/$name.md"
@@ -50,21 +58,10 @@ if agent_name_taken "$name" && [ "$force" -ne 1 ]; then
   die "agent name already live: $name (pick another --name)"
 fi
 
-# The amendment notice only makes sense while the parent still owes context.
-amendment=""
-if [ "$expect_context" -eq 1 ]; then
-  amendment="> **Context is still coming.** \`$parent\` started you from a one-line
-> instruction and is composing the rest right now. It will arrive within a minute
-> as a cross-session message. Get oriented — read what you need to read — but do
-> not commit to an approach or start editing until it lands. If it contradicts
-> anything below, it wins."
-fi
-
 tmp="$(mktemp)"; trap 'rm -f "$tmp"' EXIT
 # Literal substitution: awk's gsub would read `&` in a replacement as the matched
 # text, so a cwd like /tmp/a&b would render as /tmp/a{{CWD}}b.
 BODY="$body" PARENT="$parent" CWD="$PWD" SUB_NAME="$name" BRIEFING_PATH="$briefing" \
-AMENDMENT="$amendment" \
   awk '
     function subst(s, key, val,   out, i) {
       out = ""
@@ -80,10 +77,6 @@ AMENDMENT="$amendment" \
       line = subst(line, "{{SUB_NAME}}",      ENVIRON["SUB_NAME"])
       line = subst(line, "{{BRIEFING_PATH}}", ENVIRON["BRIEFING_PATH"])
       if (line == "{{BODY}}") { print ENVIRON["BODY"]; next }
-      if (line == "{{AMENDMENT}}") {
-        if (ENVIRON["AMENDMENT"] != "") print ENVIRON["AMENDMENT"] "\n"
-        next
-      }
       print line
     }
   ' "$here/../templates/briefing.md" > "$tmp" || die "failed to render briefing"
@@ -91,10 +84,13 @@ AMENDMENT="$amendment" \
 if [ "$dry" -eq 1 ]; then
   echo "--- would write $briefing ---"; cat "$tmp"
   echo "--- would split $direction from ${HERDR_PANE_ID:-?} and start $name on $model ---"
+  if [ "$detach" -eq 1 ]; then echo "--- would detach the start and return immediately ---"
+  else echo "--- would wait for the start inline ---"; fi
   exit 0
 fi
 
 cp "$tmp" "$briefing" || die "failed to write $briefing"
+prof "spawn: briefing written"
 
 # The pane is launched by the herdr server, not by this session, so nothing of
 # ours reaches it except what is passed here. CLAUDE_CONFIG_DIR is forwarded when
@@ -107,57 +103,57 @@ split="$(herdr pane split --pane "$HERDR_PANE_ID" --direction "$direction" \
   --cwd "$PWD" --no-focus "${split_env[@]}" 2>&1)"
 pane="$(printf '%s' "$split" | jq -r '.result.pane.pane_id // empty' 2>/dev/null)"
 [ -n "$pane" ] || die "pane split failed: $split"
+prof "spawn: pane split"
 
-start="$(herdr agent start "$name" --kind claude --pane "$pane" --timeout 90000 \
-  -- --model "$model" "@$briefing" 2>&1)"
-if ! printf '%s' "$start" | jq -e '.result' >/dev/null 2>&1; then
-  cat <<EOF
-SUB_START_FAILED
-  sub name:  $name
-  pane:      $pane
-  model:     $model
-  briefing:  $briefing
-  herdr said: $start
-
-The pane exists and the briefing is written, but the session never reached a
-prompt. The usual cause is Claude Code's folder-trust dialog for a cwd that has
-never been accepted — that is the user's decision to make, not the model's.
-Inspect with: herdr agent read $name --source recent-unwrapped --lines 60
-EOF
-  exit 1
-fi
-
-# Record the spawn so the parent learns about it on its next turn, whatever wakes
-# it. One line per sub; the relay drains the file. The result is reported rather
-# than assumed: on the --brief path the hook reads this state back, and a silent
-# failure there would look like "no spawn happened" and start a second session.
+# Recorded before the sub has booted, not after: detached, this line is the only
+# thing that knows a spawn is in flight, and the relay must be able to report a
+# sub whose start has not finished yet. The finisher amends it by name.
 state_recorded=no
 sid="$(my_session_id)"
-if [ -n "$sid" ] && mkdir -p "$SUB_STATE_DIR" 2>/dev/null; then
-  task_line="$(printf '%s' "$body" | tr '\n' ' ' | cut -c1-200)"
-  if jq -nc --arg n "$name" --arg p "$pane" --arg m "$model" --arg c "$PWD" \
-           --arg b "$briefing" --arg t "$task_line" --arg o "$origin" \
-           --argjson e "$expect_context" \
-           '{name:$n,pane:$p,model:$m,cwd:$c,briefing:$b,task:$t,origin:$o,expect_context:($e==1)}' \
-       >> "$SUB_STATE_DIR/$sid.jsonl" 2>/dev/null; then
-    state_recorded=yes
-  fi
+task_line="$(printf '%s' "$body" | tr '\n' ' ' | cut -c1-200)"
+if record_state "$sid" "$(jq -nc --arg n "$name" --arg p "$pane" --arg m "$model" \
+      --arg c "$PWD" --arg b "$briefing" --arg t "$task_line" --arg o "$origin" \
+      --argjson ts "$(date +%s)" \
+      '{name:$n,pane:$p,model:$m,cwd:$c,briefing:$b,task:$t,origin:$o,
+        status:"starting",ts:$ts}')"; then
+  state_recorded=yes
 fi
 
-# Best effort: the sub's own messaging nickname, so the parent can address it with
-# SendMessage before the sub has written to it. Never fatal — the sub's first
-# report carries the nickname regardless.
-nickname="$(agent_nickname "$name" 2>/dev/null)" || nickname=""
+finish_env=(
+  "SUB_F_NAME=$name" "SUB_F_PANE=$pane" "SUB_F_MODEL=$model"
+  "SUB_F_BRIEFING=$briefing" "SUB_F_SID=$sid" "SUB_F_PARENT=$parent"
+)
+[ -n "${SUB_PROFILE:-}" ] && finish_env+=("SUB_PROFILE=$SUB_PROFILE")
+[ -n "${SUB_PROF_T0:-}" ] && finish_env+=("SUB_PROF_T0=$SUB_PROF_T0")
 
-cat <<EOF
-SUB_STARTED
+if [ "$detach" -eq 1 ]; then
+  # setsid puts the finisher in its own session so it survives the caller's process
+  # group being torn down, and the three redirections are what actually release the
+  # caller: a child holding the inherited stdout keeps the hook's pipe open, and
+  # whoever is reading it blocks until the child exits regardless of this `&`.
+  env "${finish_env[@]}" SUB_F_DETACHED=1 \
+    setsid bash "$here/finish-spawn.sh" >/dev/null 2>&1 </dev/null &
+  disown 2>/dev/null || true
+  prof "spawn: finisher detached"
+  cat <<EOF
+SUB_STARTING
   sub name:   $name
-  nickname:   ${nickname:-unresolved}
   pane:       $pane
   model:      $model
   cwd:        $PWD
   briefing:   $briefing
   reports to: $parent
-  awaiting context: $([ "$expect_context" -eq 1 ] && echo yes || echo no)
   state recorded: $state_recorded
+
+The pane is open and the briefing is written. The session is still booting; its
+outcome and messaging address reach the parent through the relay.
 EOF
+  exit 0
+fi
+
+out="$(env "${finish_env[@]}" SUB_F_DETACHED=0 bash "$here/finish-spawn.sh" 2>&1)"
+rc=$?
+printf '%s\n' "$out"
+[ $rc -eq 0 ] && echo "  state recorded: $state_recorded"
+prof "spawn: finisher returned inline"
+exit $rc

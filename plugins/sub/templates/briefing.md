@@ -4,7 +4,6 @@ Parent session nickname: {{PARENT}}
 Working directory: {{CWD}}
 Your briefing file: {{BRIEFING_PATH}}
 
-{{AMENDMENT}}
 ## Protocol
 
 You were started by another Claude Code session (the **parent**) to do the task

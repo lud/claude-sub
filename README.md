@@ -10,6 +10,9 @@ all**: a `UserPromptExpansion` hook intercepts the command, does the whole spawn
 and blocks the expansion. The sub is already reading its briefing before the
 parent would have finished reading its instructions.
 
+There are two doors, and which one you want is decided by one question: does the
+task make sense to a session that has never seen this conversation?
+
 ## Install
 
 ```
@@ -17,44 +20,52 @@ claude plugin marketplace add ~/src/claude-sub
 claude plugin install sub@claude-sub
 ```
 
-## The three ways a sub gets started
+## The two ways a sub gets started
 
-| | who starts it | parent turns |
-|---|---|---|
-| `/sub:spawn <task>` | the user | **0** |
-| `/sub:spawn --brief <task>` | the user | 1, spent entirely on briefing the sub |
-| the `delegate` skill | the parent, on its own initiative | 1 |
+| | who starts it | parent turns | the sub's briefing |
+|---|---|---|---|
+| `/sub:spawn <task>` | the user | **0** | the task text, verbatim |
+| `/sub:delegate <task>` | the user, or the parent on its own initiative | 1 | written by the parent |
 
-All three funnel through `scripts/spawn.sh`, which is the only place a sub is ever
-created.
+Both funnel through `scripts/spawn.sh`, which is the only place a sub is ever
+created, and both return as soon as the pane exists.
 
-### `/sub:spawn [--brief] [--model <id>] [--name <id>] <task>`
+### `/sub:spawn [--model <id>] [--name <id>] <task>`
 
-Without `--brief`: the hook spawns and blocks. The task text is the briefing,
-verbatim. The parent never runs — it finds out on its next turn, from the relay.
+The hook spawns and blocks. The task text is the briefing, verbatim, and that is
+all the sub will ever know. The parent never runs — it finds out on its next turn,
+from the relay. The right door for work that stands on its own: "bump the deps and
+run the suite".
 
-With `--brief`: the sub **still starts immediately**, and the only difference is
-that the expansion is let through, so the parent gets one turn whose whole job is
-to send the sub the context this conversation holds and a one-line prompt could
-not carry. The sub's briefing carries a notice telling it exactly that, so it
-orients itself but holds off on committing to an approach until the message lands.
+The spawn returns in ~85ms. Waiting for the new session to reach a prompt is
+another 4.4–12.5s of Claude Code boot, and nothing in the turn reads that result,
+so it is handed to a detached finisher and the prompt comes straight back. The
+relay reports the outcome, including a failure.
 
-Use `--brief` whenever the task leans on the conversation — "tidy the parser
-module" means nothing to a session that has never seen it.
+### `/sub:delegate <task>` — the `delegate` skill
 
-### The `delegate` skill
+One turn, spent writing the briefing. The right door whenever the task leans on
+the conversation: "tidy the parser module" means nothing to a session that has
+never seen it.
 
-The hook can only fire on something the *user* types, so it would have taken away
-the parent's ability to spawn subs on its own. The skill restores it: the parent
-loads it when asked to hand work off, and spawns one sub per Bash call — which is
-also the path that produces the richest briefing, since the model writes the whole
-thing up front.
+The same skill is how the *parent* spawns subs on its own initiative — the hook
+can only fire on something the user types, so without it the model would have no
+route at all. Either way it spawns one sub per Bash call, and the model writes the
+whole briefing up front.
+
+Because the context lands in the briefing **file**, the sub reads it before its
+first move and still has it after a compaction.
+
+A sub started by `/sub:spawn` is not stranded if it turns out to need context: the
+relay hands the parent its messaging address, so the parent can fill it in with
+`SendMessage` rather than spawning a second one.
 
 ## How the parent learns things
 
 - **That a sub started** — on its next turn, from the `UserPromptSubmit` relay,
   which drains one note per sub and then forgets them. Not a wake-up, not a
   message: a chunk of context added to a turn that was going to happen anyway.
+  The note carries the sub's messaging address, so the parent can reach it.
 - **That a sub finished** — one cross-session message from the sub. This one does
   wake the parent, deliberately: the user may type nothing after `/sub:spawn`, and
   the sub's report is then the only thing that can advance the parent's turn.
@@ -62,9 +73,13 @@ thing up front.
 Subs open their report by naming themselves and their task, because a parent that
 spent zero turns spawning them has no memory of doing so.
 
-There is no ack. The spawn is synchronous and its result is known before anything
-else happens, so an ack would prove nothing that is not already proven — it would
-just be a wake-up and two wasted turns.
+- **That a sub failed to start** — through the relay like any other outcome, plus
+  a herdr notification at the moment it happens, since a folder-trust dialog is
+  the user's to answer and waiting for their next prompt to mention it is too late.
+
+There is no ack. The pane and the briefing are proven before the prompt comes
+back, and the boot that follows reports itself, so an ack would prove nothing that
+is not already proven — it would just be a wake-up and two wasted turns.
 
 ## Layering
 
@@ -72,6 +87,12 @@ Every automatic path degrades to a working manual one:
 
 - Hook cannot run (older CLI, hooks disabled by policy) → the command expands, its
   pre-run reports `NO_SPAWN`, and the body spawns the sub through the same script.
+- Detached finisher dies before recording an outcome → the spawn record stays in
+  `.state/` and the relay reports it as unconfirmed once it is three minutes old,
+  rather than holding it forever or claiming a session that is not there.
+- Relay and finisher write `.state/` concurrently → the relay claims the file by
+  rename, and records are merged by name with outcomes sorted last, so an
+  in-flight record restored after an outcome already landed cannot mask it.
 - Relay never fires → the parent still learns everything from the sub's report.
 - `herdr` or `jq` missing, or `HERDR_ENV != 1` → the spawn refuses with a reason
   rather than half-starting something.
@@ -80,14 +101,15 @@ Every automatic path degrades to a working manual one:
 
 ```
 plugins/sub/
-  commands/spawn.md        /sub:spawn  — the --brief turn, and the no-hook fallback
+  commands/spawn.md        /sub:spawn  — the no-hook fallback only
   commands/report.md       /sub:report — update from the sub's pane
-  skills/delegate/         parent-initiated spawning
+  skills/delegate/         /sub:delegate — the briefing-writing path
   hooks/hooks.json         UserPromptExpansion (zero-turn) + UserPromptSubmit (relay)
   scripts/spawn.sh         the only place a sub is created
+  scripts/finish-spawn.sh  the boot wait, run inline or detached
   scripts/spawn-hook.sh    zero-turn entry point
   scripts/relay.sh         next-turn notice, drained once
-  scripts/last-spawn.sh    pre-run for the --brief turn
+  scripts/last-spawn.sh    pre-run for the fallback, and a double-spawn guard
   scripts/parent.sh        pre-run for /sub:report
   scripts/lib.sh           nickname, model, geometry, name allocation
   templates/briefing.md    what the sub reads in its first turn
@@ -113,8 +135,6 @@ Probed on 2026-09-14, Claude Code 2.1.270 — re-check if a version bump breaks 
 - `UserPromptExpansion` fires for slash commands with `command_name` (namespaced,
   e.g. `sub:spawn`), `command_args`, `cwd` and `session_id`, and its matcher is a
   regex over the command name.
-- It runs **before** the command body's `!` pre-runs, which is what lets the
-  `--brief` turn read the spawn the hook just performed.
 - `{"decision":"block","reason":…}` on stdout with exit 0 stops the expansion and
   shows the reason to the user; the model gets no turn. Exit 2 also blocks, with
   stderr as the reason.
@@ -126,21 +146,35 @@ Probed on 2026-09-14, Claude Code 2.1.270 — re-check if a version bump breaks 
   `<config-dir>/projects/*/<session-id>.jsonl`.
 - `CLAUDE_CONFIG_DIR` must be set in the shell (project `settings.json` `env` no
   longer sets it), so hooks inherit it from the session that triggered them.
+- `herdr agent start` has no no-wait mode — `--timeout` only caps the wait — and
+  it returns on interactivity whether or not an initial `@briefing` is queued.
+  Measured between 4.4s and 12.5s across runs on one machine — Claude Code's boot
+  is variable, which is the case for never waiting on it. Every other herdr call
+  is 2-4ms.
+- The expansion hook cannot be marked `async`: an async hook is fire-and-forget,
+  so its `decision` is not read, and the block is what buys the zero turn. The
+  asynchrony therefore lives one level down: `spawn.sh` detaches the boot.
+- A backgrounded child that inherits the hook's stdout keeps the pipe open and the
+  hook still blocks. `setsid` plus `>/dev/null 2>&1 </dev/null` is what actually
+  releases it.
 
 ## Context never travels through a shell
 
-The `--brief` turn sends the sub a message that quotes this conversation and the
-repository, so it will contain backticks, `$(...)`, quotes and backslashes. That
-text goes through `SendMessage`, which takes it as a parameter — there is no shell
-to escape and nothing in it can execute.
+A briefing quotes this conversation and the repository, so it will contain
+backticks, `$(...)`, quotes and backslashes. It reaches the sub by two routes and
+neither is a shell command line:
 
-This is why `spawn.sh` resolves and prints the sub's own messaging nickname: a
-session's nickname is `.name` in its registry file, found from the herdr agent's
-session id (`herdr agent get <name>` → `.agent_session.value`). Without it the
-parent would have no address for a sub that has not yet written to it, and the
-only remaining channel would be `herdr agent prompt <name> "<text>"` — a shell
-command line built out of repository text. Both the command and the skill say to
-use `SendMessage` and nothing else.
+- **At spawn**, as the heredoc on stdin to `spawn.sh`, which reads it whole and
+  writes it to a file. A quoted heredoc expands nothing.
+- **Afterwards**, as `SendMessage`, which takes the text as a parameter.
+
+This is why the sub's own messaging nickname is resolved and recorded: a session's
+nickname is `.name` in its registry file, found from the herdr agent's session id
+(`herdr agent get <name>` → `.agent_session.value`). Without it the parent would
+have no address for a sub that has not yet written to it, and the only remaining
+channel would be `herdr agent prompt <name> "<text>"` — a shell command line built
+out of repository text. The relay carries that address to the parent, and the
+command and the skill both say to use `SendMessage` and nothing else.
 
 ## Testing
 
@@ -148,9 +182,17 @@ use `SendMessage` and nothing else.
 test/run.sh
 ```
 
-28 assertions over argument parsing, name validation, template rendering and path
-resolution. Nothing spawns a pane: every case runs `--dry-run` against a fixture
-config directory, so the suite touches neither the real `~/.claude` nor herdr.
+53 assertions over argument parsing, name validation, template rendering, path
+resolution and relay record merging. Nothing spawns a pane: every case runs
+`--dry-run` against a fixture config directory, so the suite touches neither the
+real `~/.claude` nor herdr.
+
+The suite unsets `SUB_TASKS_DIR` and the session-id variables before it starts. A
+session that exports them — anything started by `/sub:spawn` — would otherwise
+have them win over the fixture and point every case at the real config directory.
+
+To attribute a slow spawn where it actually runs, set `SUB_PROFILE=1` in the shell
+before launching Claude Code; phase timings land in `sub-tasks/.state/profile.log`.
 
 ## Iterating
 
@@ -167,13 +209,15 @@ Commands and hooks reload on the next session.
 ## Known rough edges
 
 If the cwd has never been trusted by Claude Code, the new session stops on the
-folder-trust dialog and `herdr agent start` returns `agent_not_ready`. The spawn
-prints `SUB_START_FAILED` with the pane id and leaves the pane open; every path is
-told to surface it to the user rather than answer the dialog for them.
+folder-trust dialog and `herdr agent start` returns `agent_not_ready`. The pane is
+left open; every path is told to surface it to the user rather than answer the
+dialog for them. Detached, this surfaces as a herdr notification at the time and
+through the relay on the next turn; inline, as `SUB_START_FAILED` on stdout.
 
-If the spawn cannot be recorded in `.state/`, the `--brief` path blocks with the
-sub's details instead of letting the expansion through: the command body would
-otherwise read `NO_SPAWN` and start a *second* session for the same task.
+A sub started by `/sub:spawn` has only its one line of task text. That is the
+design, not an oversight — but it does mean a task phrased against the
+conversation produces a sub that will guess. `/sub:delegate` is the door for
+those, and the block message says so.
 
 ## Retired
 

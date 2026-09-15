@@ -7,15 +7,19 @@
 # reason. The sub is running before the parent would otherwise have finished
 # reading its instructions.
 #
-# `--brief` is the escape hatch back to the model. The sub still starts here and
-# now — the only difference is that the expansion is allowed through, so the
-# parent gets one turn whose whole job is to send the sub the context this
-# conversation holds and the one-line prompt could not carry. The sub is told to
-# expect it.
+# This hook always blocks, so the spawn is always free. The task text is the whole
+# briefing — a sub started here knows nothing of the conversation. When the task
+# only makes sense with that context, /sub:delegate is the door: it spends a turn
+# writing the context into the briefing itself, where it survives compaction.
+#
+# The block is what buys the zero turn, so the hook cannot be marked async — an
+# async hook is fire-and-forget and its decision is never read. The asynchrony
+# lives one level down instead: spawn.sh detaches Claude Code's boot and returns
+# as soon as the pane exists, and the relay reports the outcome on the next turn.
 #
 # Layering: if this hook cannot run (older CLI without the event, hooks disabled
-# by policy), the command expands normally and its body spawns the sub through
-# the same script — so every path starts exactly one sub.
+# by policy), the command expands normally and its body spawns the sub through the
+# same script — so every path starts exactly one sub.
 #
 # stdout must carry only the JSON object; exit 0 is what makes it count.
 set -uo pipefail
@@ -45,14 +49,27 @@ while :; do
 done
 task="$rest"
 
+# --brief used to start the sub here and let the expansion through so the model
+# could send it context afterwards. /sub:delegate does the same job in one piece
+# and writes the context into the briefing file, so nothing is spawned here: a sub
+# started now would be the wrong one, and killing it would be the user's problem.
+if [ "$brief" -eq 1 ]; then
+  block "sub: --brief is now /sub:delegate.
+
+  /sub:delegate ${task:-<task>}
+
+Nothing was started. /sub:delegate spends one turn writing this conversation's
+context into the briefing itself, so the sub reads it up front and still has it
+after a compaction."
+fi
+
 if [ -z "${task//[[:space:]]/}" ]; then
   block "sub: nothing to delegate.
 
-  /sub:spawn [--brief] [--model <id>] [--name <id>] <task>
+  /sub:spawn [--model <id>] [--name <id>] <task>
 
-The task text becomes the sub's briefing verbatim. Add --brief when the task only
-makes sense with context from this conversation: the sub still starts immediately,
-and this session gets one turn to send it that context."
+The task text becomes the sub's briefing verbatim, and that is all the sub knows.
+When the task leans on this conversation, use /sub:delegate instead."
 fi
 
 # Spawning from a directory other than the one the user invoked from would put
@@ -64,7 +81,6 @@ fi
 set -- --origin hook
 [ -n "$name" ]  && set -- "$@" --name "$name"
 [ -n "$model" ] && set -- "$@" --model "$model"
-[ "$brief" -eq 1 ] && set -- "$@" --expect-context
 
 out="$(printf '%s\n' "$task" | SUB_SESSION_ID="$sid" bash "$here/spawn.sh" "$@" 2>&1)"
 rc=$?
@@ -78,23 +94,13 @@ field() { printf '%s' "$out" | sed -n "s/^  $1: *//p" | head -1; }
 sub_name="$(field 'sub name')"
 pane="$(field 'pane')"
 model_used="$(field 'model')"
-recorded="$(field 'state recorded')"
 
-if [ "$brief" -eq 1 ]; then
-  # The command body reads the spawn back out of the state file. If that file was
-  # never written it would read NO_SPAWN and start a second session for the same
-  # task, so an unrecorded spawn is reported to the user here instead.
-  if [ "$recorded" = yes ]; then exit 0; fi
-  block "$sub_name is running in pane $pane on $model_used, but its spawn could not
-be recorded, so this session cannot be handed the context step automatically.
+# A pane and a briefing, not yet a running session: the boot is deliberately not
+# waited on. Say only what is known — if it never reaches a prompt, a herdr
+# notification fires at that moment and the relay repeats it on the next turn.
+block "$sub_name is starting in pane $pane on $model_used.
 
-The sub was told to expect a briefing message and is waiting for one. Send it the
-context yourself, or tell this session to brief $sub_name."
-fi
+Briefing: the task text, verbatim — it has none of this conversation. It reports
+back here by message when it is done, and you can talk to it in its pane now.
 
-block "$sub_name is running in pane $pane on $model_used.
-
-Briefing: the task text, verbatim. It reports back here by message when it is
-done; you can talk to it directly in its pane meanwhile.
-
-If it needed context from this conversation, re-run with --brief."
+To fill it in from here, ask me to brief $sub_name."
