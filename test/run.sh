@@ -186,15 +186,24 @@ cat > "$fixture/bin/herdr" <<'STUB'
 #!/usr/bin/env bash
 # Stand-in for herdr: the calls the finisher makes, answered from STUB_*.
 printf '%s\n' "$*" >> "${STUB_LOG:-/dev/null}"
+# An agent written to $STUB_AGENT_DIR/<target>.json answers for that target —
+# one file per name and per pane, so a case can hold several subs at once.
 case "$1 $2" in
   "agent start")
     if [ "${STUB_START:-ok}" = ok ]; then echo '{"result":{"agent":{"name":"stub"}}}'
     else echo '{"error":{"code":"agent_not_ready","message":"blocked during startup"}}'; fi ;;
   "agent get")
-    if [ "${STUB_AGENT:-idle}" = none ]; then echo '{"error":{"code":"agent_not_found"}}'
+    if [ -f "${STUB_AGENT_DIR:-/nowhere}/$3.json" ]; then cat "${STUB_AGENT_DIR}/$3.json"
+    elif [ -n "${STUB_AGENT_DIR:-}" ]; then echo '{"error":{"code":"agent_not_found"}}'
+    elif [ "${STUB_AGENT:-idle}" = none ]; then echo '{"error":{"code":"agent_not_found"}}'
     else jq -nc --arg s "${STUB_AGENT:-idle}" --arg n "${STUB_AGENT_NAME:-}" \
       '{result:{agent:{name:(if $n == "" then null else $n end),agent_status:$s,
                        agent_session:{value:"sub-session"}}}}'; fi ;;
+  "agent prompt")
+    # /exit: the session goes away, and with it every target that named it.
+    pane="$(jq -r '.result.agent.pane_id // empty' "${STUB_AGENT_DIR:-/nowhere}/$3.json" 2>/dev/null)"
+    rm -f "${STUB_AGENT_DIR:-/nowhere}/$3.json" ${pane:+"${STUB_AGENT_DIR}/$pane.json"}
+    echo '{"result":{}}' ;;
   *) echo '{"result":{}}' ;;
 esac
 STUB
@@ -250,6 +259,87 @@ check "the relay still hands over its address" "address: claude-u-1" "$out"
 seed '{"name":"sub-v","status":"blocked","nickname":"claude-v-1"}' "$(spawned sub-v)"
 check "the relay sends the user to the dialog" "waiting at a dialog in its pane" \
   "$(printf '%s' "$rpay" | run bash "$relay")"
+
+echo "pruning what has reported"
+# Having reported is the only disposability signal this session actually has, and
+# it outlives both the relay state and a compaction because the report is in the
+# transcript. Everything else — in flight, working again since, someone else's —
+# is left alone unless the user names it.
+prune="$root/plugins/sub/scripts/prune.sh"
+subs="$root/plugins/sub/scripts/subs.sh"
+agents="$fixture/agents"
+mkdir -p "$agents" "$fixture/sub-tasks" "$fixture/projects/p"
+mksub() { # mksub <name> <pane|-> <status> <session-id> <parent>
+  printf 'Parent session nickname: %s\nWorking directory: /tmp\n\n## Task\n\n%s task\n' \
+    "${5:-test-parent}" "$1" > "$fixture/sub-tasks/$1.md"
+  [ "$2" = "-" ] || { jq -nc --arg n "$1" --arg p "$2" --arg s "$3" --arg v "$4" \
+    '{result:{agent:{name:$n,agent_status:$s,pane_id:$p,agent_session:{value:$v}}}}' \
+    > "$agents/$1.json"; cp "$agents/$1.json" "$agents/$2.json"; }
+}
+prun() { CLAUDE_CONFIG_DIR="$fixture" SUB_TASKS_DIR="$fixture/sub-tasks" \
+         SUB_SESSION_ID=test-session CLAUDE_PID=4242 HERDR_ENV=1 \
+         PATH="$fixture/bin:$PATH" STUB_AGENT_DIR="$agents" STUB_LOG="$flog" "$@" 2>&1; }
+
+rm -f "$fixture/sub-tasks"/*.md "$agents"/*.json
+cat > "$fixture/sessions/5001.json" <<JSON
+{"pid":5001,"sessionId":"s-done","name":"claude-done-1","cwd":"/tmp"}
+JSON
+cat > "$fixture/sessions/5002.json" <<JSON
+{"pid":5002,"sessionId":"s-busy","name":"claude-busy-1","cwd":"/tmp"}
+JSON
+cat > "$fixture/sessions/5003.json" <<JSON
+{"pid":5003,"sessionId":"s-mute","name":"claude-mute-1","cwd":"/tmp"}
+JSON
+# Only the first two ever wrote to this session, and only as cross-session
+# messages — the wrapper is JSON in the transcript, so the quotes are escaped.
+cat > "$fixture/projects/p/test-session.jsonl" <<'JSON'
+{"type":"user","message":{"content":"<cross-session-message from=\"uds:/x\" from-name=\"claude-done-1\">done here</cross-session-message>"}}
+{"type":"user","message":{"content":"<cross-session-message from=\"uds:/x\" from-name=\"claude-busy-1\">first pass done</cross-session-message>"}}
+JSON
+
+mksub sub-done w1:p1 idle    s-done
+mksub sub-busy w1:p2 working s-busy
+mksub sub-mute w1:p3 idle    s-mute
+mksub sub-gone -    gone     -
+mksub sub-other w1:p9 idle   s-done other-parent
+
+out="$(prun bash "$subs")"
+check "the inventory names this session's subs" "SUBS_OF: test-parent" "$out"
+check "a sub that wrote is reported" "address:  claude-done-1" "$out"
+check "the inventory carries the task" "sub-done task" "$out"
+case "$out" in *sub-other*) bad "another session's sub is not listed" "sub-other leaked" ;;
+  *) ok "another session's sub is not listed" ;; esac
+
+out="$(prun bash "$prune" --dry-run --reported)"
+check "--reported takes the one that reported" "WOULD CLOSE sub-done" "$out"
+check "--reported takes a sub whose session is gone" "WOULD CLOSE sub-gone" "$out"
+case "$out" in *sub-mute*) bad "a silent sub is left out of --reported" "sub-mute was selected" ;;
+  *) ok "a silent sub is left out of --reported" ;; esac
+check "a sub working again is left alone" "SKIPPED sub-busy — working" "$out"
+
+out="$(prun bash "$prune" --dry-run sub-mute)"
+check "a named sub that never reported is refused" "has not reported yet" "$out"
+check "--force is what closes it anyway" "WOULD CLOSE sub-mute" \
+  "$(prun bash "$prune" --dry-run --force sub-mute)"
+check "another session's sub is not ours to close" "not a sub of this session" \
+  "$(prun bash "$prune" --dry-run sub-other)"
+
+rm -f "$flog"
+out="$(prun bash "$prune" sub-done)"
+check "closing exits the session first" "agent prompt sub-done /exit" "$(cat "$flog")"
+check "closing then reclaims the pane" "pane close w1:p1" "$(cat "$flog")"
+check "a confirmed exit says so" "CLOSED sub-done — exited" "$out"
+if [ -e "$fixture/sub-tasks/sub-done.md" ]; then bad "the briefing goes with it" "briefing still there"
+else ok "the briefing goes with it"; fi
+
+out="$(prun bash "$prune" --reported)"
+check "a gone sub leaves only its briefing to clear" "CLEARED sub-gone" "$out"
+if [ -e "$fixture/sub-tasks/sub-gone.md" ]; then bad "a cleared briefing is removed" "still there"
+else ok "a cleared briefing is removed"; fi
+check "a session whose subs are all in flight prunes nothing" "NOTHING_TO_PRUNE" \
+  "$(rm -f "$fixture/sub-tasks/sub-busy.md"; prun bash "$prune" --reported)"
+check "a session that started no sub says so" "NO_SUBS" \
+  "$(rm -f "$fixture/sub-tasks"/*.md; prun bash "$prune" --reported)"
 
 printf '\n%s passed, %s failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

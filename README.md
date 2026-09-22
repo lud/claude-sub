@@ -87,6 +87,32 @@ There is no ack. The pane and the briefing are proven before the prompt comes
 back, and the boot that follows reports itself, so an ack would prove nothing that
 is not already proven — it would just be a wake-up and two wasted turns.
 
+## Reclaiming panes
+
+A sub stays at its prompt after reporting, because the user may still want it.
+`/sub:prune` is how those panes come back, and only the user can call it.
+
+What the parent can know about a sub is whether it has **reported**, so that is
+what decides:
+
+- **Reported** — disposable. It said what it had to say, and the user typing
+  `/sub:prune` is the judgement call that it is no longer wanted.
+- **Never reported** — left alone. Its work is in flight, and nothing here knows
+  how much of it is in that pane. Naming it explicitly plus `--force` is the only
+  way past that.
+- **Reported, but working or blocked again** — left alone. It has been given
+  something since, and that something did not come from here.
+- **Gone** — only its briefing file is left to remove.
+
+Which subs are this session's comes from the briefings it wrote, and whether one
+reported comes from this session's transcript, where every cross-session message
+is recorded under the sender's address. Both outlive the relay state and a
+compaction, so `/sub:prune` still works in a conversation that has forgotten
+spawning anything.
+
+Each sub is sent `/exit` and given a moment to end itself before its pane is
+closed, so the session writes its own ending rather than being hung up on.
+
 ## Layering
 
 Every automatic path degrades to a working manual one:
@@ -114,6 +140,7 @@ Every automatic path degrades to a working manual one:
 plugins/sub/
   commands/spawn.md        /sub:spawn  — the no-hook fallback only
   commands/report.md       /sub:report — update from the sub's pane
+  commands/prune.md        /sub:prune  — close the subs that are finished with
   skills/delegate/         /sub:delegate — the briefing-writing path
   hooks/hooks.json         UserPromptExpansion (zero-turn) + UserPromptSubmit (relay)
   scripts/spawn.sh         the only place a sub is created
@@ -122,6 +149,8 @@ plugins/sub/
   scripts/relay.sh         next-turn notice, drained once
   scripts/last-spawn.sh    pre-run for the fallback, and a double-spawn guard
   scripts/parent.sh        pre-run for /sub:report
+  scripts/subs.sh          what this session started, and what became of it
+  scripts/prune.sh         exit a sub, close its pane, drop its briefing
   scripts/lib.sh           nickname, model, geometry, name allocation
   templates/briefing.md    what the sub reads in its first turn
 ```
@@ -172,6 +201,11 @@ Probed on 2026-09-14, Claude Code 2.1.270 — re-check if a version bump breaks 
   <name>` gives the name back afterwards.
 - `agent_status` is `blocked` while the session sits at a dialog, which is the one
   case where the user has to act.
+- `herdr agent prompt <name> "/exit" --wait --until done` ends a sub cleanly, and
+  `herdr pane close <pane-id>` reclaims the pane whether or not the exit landed.
+- Cross-session messages are recorded in the receiving session's transcript with
+  the sender's address in `from-name`, which is what makes "has it reported yet"
+  answerable from a script.
 - The expansion hook cannot be marked `async`: an async hook is fire-and-forget,
   so its `decision` is not read, and the block is what buys the zero turn. The
   asynchrony therefore lives one level down: `spawn.sh` detaches the boot.
@@ -203,9 +237,9 @@ command and the skill both say to use `SendMessage` and nothing else.
 test/run.sh
 ```
 
-74 assertions over argument parsing, name validation, template rendering, path
-resolution, relay record merging and how a start that never reports ready is
-classified. Nothing spawns a pane: every case runs
+93 assertions over argument parsing, name validation, template rendering, path
+resolution, relay record merging, how a start that never reports ready is
+classified, and which subs a prune is allowed to close. Nothing spawns a pane: every case runs
 `--dry-run` against a fixture config directory, or the finisher against a `herdr`
 stub on `PATH`, so the suite touches neither the real `~/.claude` nor herdr.
 

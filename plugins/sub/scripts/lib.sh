@@ -104,6 +104,66 @@ agent_nickname() {
   jq -r '.name // empty' "$f"
 }
 
+# This session's transcript. Cross-session messages land in it verbatim, which
+# makes it the one durable record of which subs have reported back — the relay
+# state is drained on the next turn, and the conversation may have been compacted.
+transcript_file() {
+  local sid
+  sid="$(my_session_id)" || return 1
+  [ -n "$sid" ] || return 1
+  find "$CLAUDE_DIR/projects" -maxdepth 2 -name "$sid.jsonl" 2>/dev/null | head -1
+}
+
+# Has this address ever written to this session? The transcript holds the wrapper
+# as JSON, so the quotes around the name are escaped in the file.
+has_reported() { # has_reported <nickname>
+  local t
+  [ -n "$1" ] || return 1
+  t="$(transcript_file)" || return 1
+  [ -n "$t" ] || return 1
+  grep -qF "from-name=\\\"$1\\\"" "$t"
+}
+
+# The header lines the briefing was rendered with, so a sub can be attributed to
+# the session that started it long after the relay state is gone.
+briefing_field() { # briefing_field <briefing-path> <label>
+  [ -f "$1" ] || return 1
+  sed -n "s/^$2: *//p" "$1" | head -1
+}
+
+# The first line of the task, for a listing the user has to recognise subs in.
+briefing_task() { # briefing_task <briefing-path>
+  [ -f "$1" ] || return 1
+  awk '/^## Task$/ { task = 1; next } task && NF { print; exit }' "$1" | cut -c1-120
+}
+
+# One row per sub this session started, resolved from the briefings it wrote —
+# the relay state is drained on the next turn, so the briefing files are what
+# still knows who started whom. Tab-separated: name, pane, herdr status, address,
+# reported, task. A sub whose session is gone reads as `gone`, leaving only its
+# briefing file behind.
+sub_rows() {
+  local me b name info pane astatus nick reported task
+  me="$(my_nickname)" || return 1
+  [ -n "$me" ] || return 1
+  for b in "$SUB_TASKS_DIR"/*.md; do
+    [ -e "$b" ] || continue
+    name="$(basename "$b" .md)"
+    [ "$(briefing_field "$b" 'Parent session nickname')" = "$me" ] || continue
+    info="$(herdr agent get "$name" 2>/dev/null | jq -c '.result.agent // empty' 2>/dev/null)"
+    pane="-"; astatus="gone"; nick="-"; reported="no"
+    if [ -n "$info" ]; then
+      pane="$(printf '%s' "$info" | jq -r '.pane_id // "-"' 2>/dev/null)"
+      astatus="$(printf '%s' "$info" | jq -r '.agent_status // "unknown"' 2>/dev/null)"
+      nick="$(agent_nickname "$name" 2>/dev/null)" || nick=""
+      [ -n "$nick" ] || nick="-"
+    fi
+    if [ "$nick" != "-" ] && has_reported "$nick"; then reported="yes"; fi
+    task="$(briefing_task "$b")"
+    printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$name" "$pane" "$astatus" "$nick" "$reported" "${task:-?}"
+  done
+}
+
 # First free sub-N, considering both live agents and leftover briefing files.
 next_sub_name() {
   local i=1 name
