@@ -15,7 +15,7 @@
 # The block is what buys the zero turn, so the hook cannot be marked async — an
 # async hook is fire-and-forget and its decision is never read. The asynchrony
 # lives one level down instead: spawn.sh detaches Claude Code's boot and returns
-# as soon as the pane exists, and the relay reports the outcome on the next turn.
+# as soon as the pane exists, and the relay tells the model on its next turn.
 #
 # Layering: if this hook cannot run (older CLI without the event, hooks disabled
 # by policy), the command expands normally and its body spawns the sub through the

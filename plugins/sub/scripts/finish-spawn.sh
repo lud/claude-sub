@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # The slow half of a spawn: wait for the sub to reach an interactive prompt,
-# resolve its messaging nickname, and record the outcome for the parent's relay.
+# resolve its messaging nickname, and record a start that went wrong for the
+# parent's relay. A start that went right needs no record: the sub reports itself.
 #
 # `herdr agent start` blocks for as long as Claude Code takes to boot — measured
 # between 4.4s and 12.5s, and there is no no-wait mode; --timeout only caps it.
@@ -48,8 +49,8 @@ if ! printf '%s' "$start" | jq -e '.result' >/dev/null 2>&1; then
   prof "finish: pane probed"
 
   if [ -z "$agent" ]; then
-    record_state "$sid" "$(jq -nc --arg n "$name" --arg e "$start" \
-      '{name:$n,status:"failed",error:$e}')"
+    record_state "$sid" "$(jq -nc --arg n "$name" --arg p "$pane" --arg e "$start" \
+      '{name:$n,pane:$p,status:"failed",error:$e}')"
 
     # Detached, nothing is reading this script's stdout, so the failure would sit in
     # the state file until the parent's next turn. The user is the one who has to act
@@ -86,18 +87,17 @@ MSG
   fi
 fi
 
-# Best effort: the sub's own messaging nickname, so the parent can address it with
-# SendMessage before the sub has written to it. Resolved through the pane rather
+# Best effort, for the inline caller's output. Resolved through the pane rather
 # than the name, which a start that never reported ready may not have registered.
 # Never fatal — the sub's first report carries the nickname regardless.
 nickname="$(agent_nickname "$pane" 2>/dev/null)" || nickname=""
 prof "finish: nickname resolved"
 
-record_state "$sid" "$(jq -nc --arg n "$name" --arg k "$nickname" \
-  --argjson r "$ready" --arg b "$blocked" \
-  '{name:$n,status:(if $b == "yes" then "blocked" else "started" end),
-    ready:$r,nickname:(if $k == "" then null else $k end)}')"
-prof "finish: state recorded"
+if [ "$blocked" = yes ]; then
+  record_state "$sid" "$(jq -nc --arg n "$name" --arg p "$pane" \
+    '{name:$n,pane:$p,status:"blocked"}')"
+  prof "finish: state recorded"
+fi
 
 # A sub waiting at a dialog is running, but it has not read its briefing yet and
 # only the user can let it through. Same reasoning as a failed start: waiting for

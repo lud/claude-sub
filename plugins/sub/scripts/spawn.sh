@@ -9,7 +9,7 @@
 # long as Claude Code takes to boot — measured between 4.4s and 12.5s on the same
 # machine. That call lives in finish-spawn.sh and is detached by default: no
 # caller needs its result, because the briefing is complete before the pane is
-# split and the relay reports the outcome either way. --wait runs it inline.
+# split and the relay reports a start that went wrong. --wait runs it inline.
 set -uo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=lib.sh
@@ -105,9 +105,9 @@ pane="$(printf '%s' "$split" | jq -r '.result.pane.pane_id // empty' 2>/dev/null
 [ -n "$pane" ] || die "pane split failed: $split"
 prof "spawn: pane split"
 
-# Recorded before the sub has booted, not after: detached, this line is the only
-# thing that knows a spawn is in flight, and the relay must be able to report a
-# sub whose start has not finished yet. The finisher amends it by name.
+# Recorded before the sub has booted, not after: the relay announces a hook spawn
+# on the parent's very next turn, which can be the sub's own report. The finisher
+# amends it by name only when the start goes wrong.
 state_recorded=no
 sid="$(my_session_id)"
 task_line="$(printf '%s' "$body" | tr '\n' ' ' | cut -c1-200)"
@@ -145,8 +145,9 @@ SUB_STARTING
   reports to: $parent
   state recorded: $state_recorded
 
-The pane is open and the briefing is written. The session is still booting; its
-outcome and messaging address reach the parent through the relay.
+The pane is open and the briefing is written. The session is still booting. If
+it fails to start or stops at a dialog, the relay says so on a later turn;
+otherwise it reports by message when it is done.
 EOF
   exit 0
 fi

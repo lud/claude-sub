@@ -179,19 +179,14 @@ next_sub_name() {
 
 # How the two writers' records are folded back into one per sub.
 #
-# A sub's record arrives in two pieces: the spawn writes what it knows, the
-# detached finisher appends the outcome. Merging them in file order is wrong,
-# because the relay can restore a claimed `starting` record *after* the finisher
-# has already appended its outcome to the fresh file — a window of a few
-# milliseconds that lines up with exactly when someone types after a spawn. The
-# stale record would then win, and the sub would be reported as never confirmed
-# while it was in fact running. Sorting outcomes last makes the merge independent
-# of how the lines landed.
+# A sub's record can arrive in two pieces: the spawn writes what it knows, and the
+# detached finisher appends an outcome when the start went wrong. Outcomes sort
+# last so they win whatever order the lines landed in.
 SUB_MERGE_BY_NAME='group_by(.name) | map(sort_by(.status == "starting" | not) | add)'
 
 # Append one record to this session's relay state. Records accumulate per sub —
-# the spawn writes what it knows, the finisher writes the outcome later — and the
-# relay merges them by name, so a later line carries only the fields it changes.
+# the spawn writes what it knows, the finisher writes a failed or blocked start
+# later — and the relay merges them by name.
 record_state() { # record_state <session-id> <json-object>
   local sid="$1" json="$2"
   [ -n "$sid" ] || return 1

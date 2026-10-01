@@ -14,21 +14,6 @@ subagent it has its own transcript, its own permissions and its own human: the
 user can sit in its pane and steer it. It reports back here by cross-session
 message when it finishes.
 
-## When this, and when /sub:spawn
-
-`/sub:spawn` costs no turn at all: a hook does the spawn and the task text becomes
-the briefing verbatim. That is the right door for a task that stands on its own —
-"bump the deps and run the suite".
-
-This skill costs one turn and spends it writing the briefing. That is the right
-door whenever the task leans on this conversation — "tidy the parser module" means
-nothing to a session that has never seen it. The context goes into the briefing
-file, so the sub reads it up front and still has it after a compaction.
-
-If the user typed `/sub:spawn` for a task that clearly needed context, the sub is
-already running and knows only its one line. Do not spawn a second one: the relay
-gives you its `address`, so send it what it is missing with `SendMessage`.
-
 ## Spawning
 
 One Bash call per sub. The script resolves this session's nickname and model,
@@ -76,8 +61,8 @@ walked in.
 The call returns as soon as the pane exists and the briefing is written —
 `SUB_STARTING`. The new session's boot is deliberately not waited on, so that
 output is proof the pane and briefing are real, not that the session reached a
-prompt. Its outcome and its messaging address arrive here through the relay on
-your next turn, and it reports by message when it finishes.
+prompt. If the start goes wrong, the relay tells you on a later turn; otherwise
+the sub reports by message when it finishes.
 
 Tell the user which subs you started and in which panes. Then carry on with your
 own work, or stop.
@@ -101,6 +86,3 @@ user gets a herdr notification at the moment it happens. Same for a sub reported
 as waiting at a dialog — folder trust for a cwd they never accepted, or a
 permission request. Both are their decision: tell them which pane is waiting, do
 not answer it for them, and do not spawn a replacement.
-
-A sub reported as started but never seen at an idle prompt is neither of those.
-It is running, most likely already working on its briefing. Take it as started.

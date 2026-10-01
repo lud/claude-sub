@@ -102,58 +102,55 @@ check "--wait opts back into the inline start" "would wait for the start inline"
 check "--expect-context is gone" "unknown argument" \
   "$(printf 'task\n' | run bash "$spawn" --dry-run --expect-context --name sub-x)"
 
-echo "relay record merging"
+echo "relay notices"
 relay="$root/plugins/sub/scripts/relay.sh"
 state="$fixture/sub-tasks/.state"
 mkdir -p "$state"
 rpay='{"session_id":"test-session"}'
-# <name> <status-json...> -> writes a spawn record plus whatever follows
+# <record-json...> -> replaces the session's relay state with these lines
 seed() { : >| "$state/test-session.jsonl"; for l in "$@"; do printf '%s\n' "$l" >> "$state/test-session.jsonl"; done; }
-spawned() { jq -nc --arg n "$1" --argjson ts "${2:-$(date +%s)}" \
-  '{name:$n,pane:"w1:p2",model:"m",cwd:"/tmp",briefing:"/b.md",task:"do the thing",origin:"hook",status:"starting",ts:$ts}'; }
+spawned() { jq -nc --arg n "$1" --arg o "${2:-hook}" --argjson ts "$(date +%s)" \
+  '{name:$n,pane:"w1:p2",model:"m",cwd:"/tmp",briefing:"/b.md",task:"do the thing",origin:$o,status:"starting",ts:$ts}'; }
 
-seed "$(spawned sub-a)" '{"name":"sub-a","status":"started","nickname":"claude-x-1a"}'
+# A sub given a short task can report back before its start is confirmed, so the
+# notice cannot wait for the finisher: the parent would read the report first.
+seed "$(spawned sub-a)"
 out="$(printf '%s' "$rpay" | run bash "$relay")"
-check "outcome merges onto the spawn record" "pane w1:p2" "$out"
-check "merged record carries the address" "claude-x-1a" "$out"
-check "merged record carries the task" "do the thing" "$out"
-empty "resolved record is drained" "$(cat "$state/test-session.jsonl" 2>/dev/null)"
+check "a hook spawn is announced on first sight" "pane w1:p2" "$out"
+check "the notice says the user started it" "The user started a sub-session" "$out"
+check "the notice carries the task" "do the thing" "$out"
+check "the notice expects an early report" "possibly already" "$out"
+check "an unresolved address points at from-name" "from-name of its first message" "$out"
+empty "an announced spawn is drained" "$(cat "$state/test-session.jsonl" 2>/dev/null)"
+empty "it is announced only once" "$(printf '%s' "$rpay" | run bash "$relay")"
 
-seed "$(spawned sub-b)" '{"name":"sub-b","status":"failed","error":"agent_not_ready"}'
+seed "$(spawned sub-k skill)"
+empty "a spawn the model ran itself is not announced" "$(printf '%s' "$rpay" | run bash "$relay")"
+empty "and is drained all the same" "$(cat "$state/test-session.jsonl" 2>/dev/null)"
+
+seed "$(spawned sub-b)" '{"name":"sub-b","pane":"w1:p2","status":"failed","error":"agent_not_ready"}'
 out="$(printf '%s' "$rpay" | run bash "$relay")"
 check "failure is reported, not swallowed" "FAILED TO START" "$out"
 check "failure names the pane to look at" "w1:p2" "$out"
 
-seed "$(spawned sub-c)"
-empty "in-flight spawn is not reported yet" "$(printf '%s' "$rpay" | run bash "$relay")"
-check "in-flight spawn is put back for the next turn" "sub-c" \
-  "$(cat "$state/test-session.jsonl" 2>/dev/null)"
-
-seed "$(spawned sub-e "$(( $(date +%s) - 600 ))")"
+seed '{"name":"sub-q","pane":"w1:p7","status":"failed","error":"agent_not_ready"}'
 out="$(printf '%s' "$rpay" | run bash "$relay")"
-check "a start that never landed is reported once stale" "never confirmed" "$out"
+check "a failure after the announcement stands on its own" "FAILED TO START in pane w1:p7" "$out"
 
-# The relay claims the state file by rename, so a finisher that appends its
-# outcome in that window lands BEFORE the claimed "starting" record is restored.
-# Merging in file order would let the stale record win and report a running sub as
-# never confirmed, so the raced order has to resolve exactly like the natural one.
-seed '{"name":"sub-r","status":"started","nickname":"claude-r-1"}' "$(spawned sub-r)"
-out="$(printf '%s' "$rpay" | run bash "$relay")"
-check "outcome wins when it lands before the restored record" "address: claude-r-1" "$out"
-check "raced record is not held back" "pane w1:p2" "$out"
-empty "raced record is drained" "$(cat "$state/test-session.jsonl" 2>/dev/null)"
-
-seed '{"name":"sub-q","status":"failed","error":"agent_not_ready"}' "$(spawned sub-q)"
-check "raced failure is still reported as a failure" "FAILED TO START" \
+seed '{"name":"sub-r","pane":"w1:p2","status":"failed","error":"x"}' "$(spawned sub-r)"
+check "a failure wins whatever order the lines landed in" "FAILED TO START" \
   "$(printf '%s' "$rpay" | run bash "$relay")"
 
-seed "$(spawned sub-f)" '{"name":"sub-f","status":"started","nickname":"n1"}' \
-     "$(spawned sub-g)" '{"name":"sub-g","status":"started","nickname":"n2"}'
+seed "$(spawned sub-k skill)" '{"name":"sub-k","pane":"w1:p2","status":"blocked"}'
+check "a blocked delegate spawn is still reported" "waiting at a dialog in pane w1:p2" \
+  "$(printf '%s' "$rpay" | run bash "$relay")"
+
+seed "$(spawned sub-f)" "$(spawned sub-g)"
 out="$(printf '%s' "$rpay" | run bash "$relay")"
-check "two subs are counted as plural" "2 sub-sessions are running" "$out"
+check "two subs are counted as plural" "The user started 2 sub-sessions" "$out"
 # The context block is prose about backticks and addresses; an interpolating
 # heredoc would run it instead of printing it.
-check "guidance text survives shell expansion" 'the `address` above is a SendMessage nickname' "$out"
+check "guidance text survives shell expansion" 'send what it is missing with `SendMessage`' "$out"
 case "$out" in *"command not found"*|*"commande introuvable"*)
   bad "no shell expansion artifacts in the context" "found a command-not-found in the output" ;;
   *) ok "no shell expansion artifacts in the context" ;;
@@ -226,14 +223,12 @@ frun() { # frun <sub-name> <start: ok|not_ready> <pane agent: none|idle|blocked>
 out="$(frun sub-ok ok idle)"
 check "a ready start is a start" "SUB_STARTED" "$out"
 check "a ready start resolves the address" "claude-sub-9z" "$out"
-check "a ready start records it" '"status":"started"' "$(cat "$fstate")"
-check "a ready start records readiness" '"ready":true' "$(cat "$fstate")"
+empty "a ready start records nothing" "$(cat "$fstate" 2>/dev/null)"
 
 out="$(frun sub-busy not_ready idle)"
 check "an unready live pane is not a failure" "SUB_STARTED" "$out"
 check "an unready live pane says why it is unconfirmed" "never saw it reach an idle prompt" "$out"
-check "an unready live pane is recorded as started" '"status":"started"' "$(cat "$fstate")"
-check "an unready live pane is recorded as unready" '"ready":false' "$(cat "$fstate")"
+empty "an unready live pane records nothing" "$(cat "$fstate" 2>/dev/null)"
 check "an unready live pane still resolves the address" "claude-sub-9z" "$out"
 check "an unnamed agent is named after the sub" "agent rename w9:p9 sub-busy" "$(cat "$flog")"
 case "$(cat "$flog")" in *"notification show"*)
@@ -245,6 +240,7 @@ out="$(frun sub-dlg not_ready blocked)"
 check "a blocked pane is reported as blocked" '"status":"blocked"' "$(cat "$fstate")"
 check "a blocked pane names the dialog" "waiting at a dialog" "$out"
 check "a blocked pane notifies the user" "waiting at a dialog" "$(cat "$flog")"
+check "a blocked pane records its pane" '"pane":"w9:p9"' "$(cat "$fstate")"
 
 out="$(frun sub-dead not_ready none)"
 check "an empty pane is still a failure" "SUB_START_FAILED" "$out"
@@ -252,13 +248,9 @@ check "an empty pane records the failure" '"status":"failed"' "$(cat "$fstate")"
 check "a real failure notifies the user" "failed to start" "$(cat "$flog")"
 check "a real failure points at the pane, not the unregistered name" "agent read w9:p9" "$out"
 
-seed '{"name":"sub-u","status":"started","ready":false,"nickname":"claude-u-1"}' "$(spawned sub-u)"
-out="$(printf '%s' "$rpay" | run bash "$relay")"
-check "the relay does not call an unready sub failed" "do not report it as failed" "$out"
-check "the relay still hands over its address" "address: claude-u-1" "$out"
-seed '{"name":"sub-v","status":"blocked","nickname":"claude-v-1"}' "$(spawned sub-v)"
-check "the relay sends the user to the dialog" "waiting at a dialog in its pane" \
-  "$(printf '%s' "$rpay" | run bash "$relay")"
+seed "$(spawned sub-z)"
+check "the relay resolves an address once the sub is up" "address: claude-sub-9z" \
+  "$(printf '%s' "$rpay" | PATH="$fixture/bin:$PATH" run bash "$relay")"
 
 echo "pruning what has reported"
 # Having reported is the only disposability signal this session actually has, and

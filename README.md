@@ -57,15 +57,20 @@ Because the context lands in the briefing **file**, the sub reads it before its
 first move and still has it after a compaction.
 
 A sub started by `/sub:spawn` is not stranded if it turns out to need context: the
-relay hands the parent its messaging address, so the parent can fill it in with
-`SendMessage` rather than spawning a second one.
+relay hands the parent its messaging address once the sub is up, so the parent can
+fill it in with `SendMessage` rather than spawning a second one.
 
 ## How the parent learns things
 
-- **That a sub started** — on its next turn, from the `UserPromptSubmit` relay,
-  which drains one note per sub and then forgets them. Not a wake-up, not a
-  message: a chunk of context added to a turn that was going to happen anyway.
-  The note carries the sub's messaging address, so the parent can reach it.
+- **That the user started a sub** — on its very next turn, from the
+  `UserPromptSubmit` relay, which drains one note per `/sub:spawn` and then
+  forgets them. Not a wake-up, not a message: a chunk of context added to a turn
+  that was going to happen anyway — possibly the turn the sub's own report wakes,
+  which is why the note goes out without waiting for the start to be confirmed.
+  The note says the user started it, so a report the parent never asked for is
+  not taken for a stray, and it carries the sub's address when the sub is already
+  up. Subs the parent started itself through `/sub:delegate` get no note: it read
+  the spawn's output.
 - **That a sub finished** — one cross-session message from the sub. This one does
   wake the parent, deliberately: the user may type nothing after `/sub:spawn`, and
   the sub's report is then the only thing that can advance the parent's turn.
@@ -119,17 +124,15 @@ Every automatic path degrades to a working manual one:
 
 - Hook cannot run (older CLI, hooks disabled by policy) → the command expands, its
   pre-run reports `NO_SPAWN`, and the body spawns the sub through the same script.
-- Detached finisher dies before recording an outcome → the spawn record stays in
-  `.state/` and the relay reports it as unconfirmed once it is three minutes old,
-  rather than holding it forever or claiming a session that is not there.
+- Detached finisher dies before recording an outcome → nothing is lost: it only
+  ever records a start that went wrong, and the spawn itself was announced already.
 - `herdr agent start` never sees an idle prompt → the pane decides. A live agent
-  there is a running sub, reported as started with the readiness left unconfirmed;
-  only an empty pane is a failure. The name the start never registered is applied
+  there is a running sub, and only an empty pane is a failure. The name the start never registered is applied
   to the pane agent afterwards, so `/sub:report` and `herdr agent read` still
   resolve it.
 - Relay and finisher write `.state/` concurrently → the relay claims the file by
-  rename, and records are merged by name with outcomes sorted last, so an
-  in-flight record restored after an outcome already landed cannot mask it.
+  rename, so an outcome appended in that window lands in a fresh file and is
+  reported on the next turn.
 - Relay never fires → the parent still learns everything from the sub's report.
 - `herdr` or `jq` missing, or `HERDR_ENV != 1` → the spawn refuses with a reason
   rather than half-starting something.
@@ -146,7 +149,7 @@ plugins/sub/
   scripts/spawn.sh         the only place a sub is created
   scripts/finish-spawn.sh  the boot wait, run inline or detached
   scripts/spawn-hook.sh    zero-turn entry point
-  scripts/relay.sh         next-turn notice, drained once
+  scripts/relay.sh         next-turn notice of a /sub:spawn or a failed start
   scripts/last-spawn.sh    pre-run for the fallback, and a double-spawn guard
   scripts/parent.sh        pre-run for /sub:report
   scripts/subs.sh          what this session started, and what became of it
@@ -223,12 +226,12 @@ neither is a shell command line:
   writes it to a file. A quoted heredoc expands nothing.
 - **Afterwards**, as `SendMessage`, which takes the text as a parameter.
 
-This is why the sub's own messaging nickname is resolved and recorded: a session's
+This is why the sub's own messaging nickname is resolved: a session's
 nickname is `.name` in its registry file, found from the herdr agent's session id
 (`herdr agent get <name>` → `.agent_session.value`). Without it the parent would
 have no address for a sub that has not yet written to it, and the only remaining
 channel would be `herdr agent prompt <name> "<text>"` — a shell command line built
-out of repository text. The relay carries that address to the parent, and the
+out of repository text. The relay resolves that address for the parent, and the
 command and the skill both say to use `SendMessage` and nothing else.
 
 ## Testing

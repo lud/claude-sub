@@ -1,6 +1,7 @@
 ---
 description: Delegate a task to a new interactive Claude Code session in a sibling Herdr pane.
 argument-hint: "[--model <id>] [--name <id>] <task>"
+disable-model-invocation: true
 allowed-tools: [Bash]
 ---
 
@@ -38,8 +39,8 @@ call `ListAgents`, do not run `herdr pane split` or `herdr agent start` by hand,
 and do not write the briefing with `Write` — that is the whole cost this command
 exists to remove.
 
-The call returns as soon as the pane exists; the session boots on its own and its
-outcome reaches you through the relay. Report the sub's name and pane to the user,
+The call returns as soon as the pane exists; the session boots on its own, and
+the relay tells you on a later turn if the start goes wrong. Report the sub's name and pane to the user,
 then stop. Do not poll it, do not ask whether it is done, do not run `herdr agent
 wait`.
 
