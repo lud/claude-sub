@@ -1,0 +1,30 @@
+{
+  "$schema": "https://cdn.jsdelivr.net/gh/lud/pm@main/resources/pm-project.schema.json",
+  "directory": "context/pm",
+  "types": {
+    "feature": {
+      "tag": "feat"
+    },
+    "spec": {
+      "tag": "spec"
+    },
+    "task": {
+      "tag": "task"
+    },
+    "adr": {
+      "tag": "adr",
+      "defaultStatus": "proposed",
+      "doneStatuses": [
+        "accepted",
+        "rejected",
+        "superseded"
+      ]
+    },
+    "note": {
+      "tag": "note",
+      "doneStatuses": [
+        "archived"
+      ]
+    }
+  }
+}
