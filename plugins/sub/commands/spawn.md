@@ -20,12 +20,17 @@ State of play:
 Do the spawn. One Bash call:
 
 ```bash
-"${CLAUDE_PLUGIN_ROOT}/scripts/spawn.sh" --name <suggested_name> [--model <id>] <<'BRIEF'
+"${CLAUDE_PLUGIN_ROOT}/scripts/spawn.sh" --name <suggested_name> [--model <id>] [--command "/<name> [arguments]"] <<'BRIEF'
 <the task from $ARGUMENTS, verbatim, with --model and --name stripped>
 
 <context from this conversation that the task text does not carry>
 BRIEF
 ```
+
+When the task starts with `--/<name>`, it asks the sub to run that skill or
+command: pass it as `--command "/<name> [arguments]"` with the leading `--/`
+written as `/`, and leave it out of the heredoc. The sub starts with it as its
+first prompt.
 
 You are spending a turn either way, so use it: the heredoc is the sub's whole
 briefing and it starts with an empty context. Add what it cannot discover — files

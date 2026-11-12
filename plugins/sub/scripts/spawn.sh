@@ -15,7 +15,7 @@ here="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=lib.sh
 . "$here/lib.sh"
 
-name=""; model=""; direction=""; force=0; dry=0; origin="skill"; detach=1
+name=""; model=""; direction=""; command=""; force=0; dry=0; origin="skill"; detach=1
 
 # Every value-taking option is checked before the shift: `shift 2` on a lone
 # trailing flag fails, leaves the arguments untouched, and spins forever.
@@ -27,6 +27,7 @@ while [ $# -gt 0 ]; do
     --model)     need_value --model "$#";     model="$2"; shift 2 ;;
     --direction) need_value --direction "$#"; direction="$2"; shift 2 ;;
     --origin)    need_value --origin "$#";    origin="$2"; shift 2 ;;
+    --command)   need_value --command "$#";   command="$2"; shift 2 ;;
     --wait)      detach=0; shift ;;
     --force)     force=1; shift ;;
     --dry-run)   dry=1; shift ;;
@@ -38,6 +39,17 @@ prof "spawn: parsed arguments"
 require_herdr
 
 body="$(cat)"
+# A slash command is the sub's first prompt, so Claude Code expands it exactly as
+# if the user had typed it — skills marked disable-model-invocation included. The
+# briefing then rides in the system prompt instead, and its task names the command.
+if [ -n "$command" ]; then
+  case "$command" in /?*) ;; *) die "--command must start with /: $command" ;; esac
+  intro="Your first message runs the slash command \`$command\`. Its instructions are the task."
+  if [ -n "${body//[[:space:]]/}" ]; then body="$intro
+
+$body"
+  else body="$intro"; fi
+fi
 [ -n "${body//[[:space:]]/}" ] || die "empty briefing body — nothing to delegate"
 
 parent="$(my_nickname)"
@@ -84,6 +96,8 @@ BODY="$body" PARENT="$parent" CWD="$PWD" SUB_NAME="$name" BRIEFING_PATH="$briefi
 if [ "$dry" -eq 1 ]; then
   echo "--- would write $briefing ---"; cat "$tmp"
   echo "--- would split $direction from ${HERDR_PANE_ID:-?} and start $name on $model ---"
+  if [ -n "$command" ]; then echo "--- would start it with the briefing as system prompt and $command as first prompt ---"
+  else echo "--- would start it with the briefing as first prompt ---"; fi
   if [ "$detach" -eq 1 ]; then echo "--- would detach the start and return immediately ---"
   else echo "--- would wait for the start inline ---"; fi
   exit 0
@@ -122,6 +136,7 @@ fi
 finish_env=(
   "SUB_F_NAME=$name" "SUB_F_PANE=$pane" "SUB_F_MODEL=$model"
   "SUB_F_BRIEFING=$briefing" "SUB_F_SID=$sid" "SUB_F_PARENT=$parent"
+  "SUB_F_COMMAND=$command"
 )
 [ -n "${SUB_PROFILE:-}" ] && finish_env+=("SUB_PROFILE=$SUB_PROFILE")
 [ -n "${SUB_PROF_T0:-}" ] && finish_env+=("SUB_PROF_T0=$SUB_PROF_T0")

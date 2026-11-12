@@ -32,6 +32,10 @@ BRIEF
 - `--model` — omit it and the sub inherits this session's exact model id. Pass it
   only when the user asked for a different one, or when the work is clearly
   cheaper than this conversation.
+- `--command "/<name> [arguments]"` — when the task is to run a skill or slash
+  command (the user may write it `--/<name>`). The sub starts with it as its first
+  prompt, so it expands as if the user typed it there; the heredoc carries only
+  the context.
 - Spawning several at once is fine and is the point — one call each, in one
   message so they run concurrently. Give each one a slice that does not need the
   others' output; they cannot see each other.

@@ -37,6 +37,15 @@ all the sub will ever know. The parent never runs — it finds out on its next t
 from the relay. The right door for work that stands on its own: "bump the deps and
 run the suite".
 
+To hand the sub a skill or command, write its leading slash as `--/`:
+`/sub:spawn --/pm-hello`. Claude Code's prompt removes a known `/<name>` placed
+right after `/sub:spawn`, so the hook would receive nothing. The hook turns the
+leading `--/` back into `/` and starts the sub with that command as its first
+prompt, so it expands there as if the user had typed it — skills marked
+`disable-model-invocation` included. The briefing's protocol rides in the sub's
+system prompt instead (`--append-system-prompt-file`), which also keeps it
+through compaction.
+
 The spawn returns in ~85ms. Waiting for the new session to reach a prompt is
 another 4.4–12.5s of Claude Code boot, and nothing in the turn reads that result,
 so it is handed to a detached finisher and the prompt comes straight back. The
@@ -195,7 +204,7 @@ Probed on 2026-09-14, Claude Code 2.1.270 — re-check if a version bump breaks 
   case for never waiting on it. Every other herdr call is 2-4ms.
 - A start that does not reach that prompt returns `agent_not_ready` and registers
   no name: `herdr agent get <name>` then answers `agent_not_found` for a session
-  that is running. A sub is started with `@briefing` already queued, so going
+  that is running. A sub is started with its first prompt already queued, so going
   straight to work looks exactly like never coming up — observed on 2026-09-15,
   twice, on subs that went on to complete their task and report.
 - `herdr agent get <pane-id>` answers for the agent in a pane whether or not it

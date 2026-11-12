@@ -93,6 +93,9 @@ check "bad name blocks before any pane" "must match" "$out"
 out="$(payload '--brief tidy the parser module' | run bash "$hook")"
 check "--brief points at /sub:delegate" "/sub:delegate tidy the parser module" "$out"
 check "--brief starts nothing" "Nothing was started" "$out"
+check "empty task explains the --/ escape" "--/<name>" "$(payload '' | run bash "$hook")"
+out="$(payload '--name sub.bad --/pm-hello' | run bash "$hook")"
+check "--/ after flags still parses the flags" "must match" "$out"
 
 echo "detached spawning"
 check "the start is detached by default" "would detach the start" \
@@ -205,6 +208,32 @@ case "$1 $2" in
 esac
 STUB
 chmod +x "$fixture/bin/herdr"
+
+echo "slash commands handed to the sub"
+# This herdr knows no agent and splits no pane, so the hook stops right after the
+# briefing is written — which is the part these cases read.
+mkdir -p "$fixture/bin-nosplit"
+printf '#!/usr/bin/env bash\n[ "$1 $2" = "agent get" ] && exit 1\necho "{}"\n' \
+  > "$fixture/bin-nosplit/herdr"
+chmod +x "$fixture/bin-nosplit/herdr"
+hrun() { PATH="$fixture/bin-nosplit:$PATH" run bash "$hook"; }
+payload '--name sub-skill --/pm-hello now' | hrun >/dev/null
+check "a leading --/ becomes the sub's slash command" \
+  'Your first message runs the slash command `/pm-hello now`' \
+  "$(cat "$fixture/sub-tasks/sub-skill.md" 2>/dev/null)"
+check "a bare --/ is nothing to delegate" "nothing to delegate" "$(payload '--/' | hrun)"
+payload '--name sub-mid run it --/later' | hrun >/dev/null
+check "a --/ past the start is left alone" "run it --/later" \
+  "$(cat "$fixture/sub-tasks/sub-mid.md" 2>/dev/null)"
+rm -f "$fixture/sub-tasks/sub-skill.md" "$fixture/sub-tasks/sub-mid.md"
+check "a command must start with /" "must start with /" \
+  "$(: | run bash "$spawn" --dry-run --name sub-c --command pm-hello)"
+out="$(: | run bash "$spawn" --dry-run --name sub-c --command '/pm-hello now')"
+check "a command needs no other body" "runs the slash command" "$out"
+check "a command is the first prompt" "/pm-hello now as first prompt" "$out"
+check "a body is still the first prompt" "briefing as first prompt" \
+  "$(printf 'task\n' | run bash "$spawn" --dry-run --name sub-c)"
+
 cat > "$fixture/sessions/9999.json" <<JSON
 {"pid":9999,"sessionId":"sub-session","name":"claude-sub-9z","cwd":"/tmp"}
 JSON
@@ -217,8 +246,14 @@ frun() { # frun <sub-name> <start: ok|not_ready> <pane agent: none|idle|blocked>
   STUB_START="$2" STUB_AGENT="$3" \
   SUB_F_NAME="$1" SUB_F_PANE="w9:p9" SUB_F_MODEL="m" SUB_F_BRIEFING="/b.md" \
   SUB_F_SID="finish-session" SUB_F_PARENT="test-parent" SUB_F_DETACHED=1 \
-  bash "$fin" 2>&1
+  SUB_F_COMMAND="${FCMD:-}" bash "$fin" 2>&1
 }
+
+frun sub-brief ok idle >/dev/null
+check "a briefing starts the sub as its first prompt" "-- --model m @/b.md" "$(cat "$flog")"
+FCMD='/pm-hello now' frun sub-cmd ok idle >/dev/null
+check "a command starts the sub with the briefing as system prompt" \
+  "-- --model m --append-system-prompt-file /b.md /pm-hello now" "$(cat "$flog")"
 
 out="$(frun sub-ok ok idle)"
 check "a ready start is a start" "SUB_STARTED" "$out"

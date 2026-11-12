@@ -49,6 +49,15 @@ while :; do
 done
 task="$rest"
 
+# The interactive prompt drops a known slash command placed right after
+# /sub:spawn before this hook sees it, so a sub that should run a skill is asked
+# for as `--/skill`. The sub then starts on that command as its first prompt.
+command=""
+case "$task" in
+  "--/"[![:space:]]*) command="/${task#--/}"; task="" ;;
+  "--/"*) task="" ;;
+esac
+
 # --brief used to start the sub here and let the expansion through so the model
 # could send it context afterwards. /sub:delegate does the same job in one piece
 # and writes the context into the briefing file, so nothing is spawned here: a sub
@@ -63,13 +72,18 @@ context into the briefing itself, so the sub reads it up front and still has it
 after a compaction."
 fi
 
-if [ -z "${task//[[:space:]]/}" ]; then
+if [ -z "${task//[[:space:]]/}" ] && [ -z "$command" ]; then
   block "sub: nothing to delegate.
 
   /sub:spawn [--model <id>] [--name <id>] <task>
 
 The task text becomes the sub's briefing verbatim, and that is all the sub knows.
-When the task leans on this conversation, use /sub:delegate instead."
+When the task leans on this conversation, use /sub:delegate instead.
+
+To have the sub run a skill or command, write it as --/<name>: Claude Code
+removes a /<name> placed right after /sub:spawn before it reaches the sub.
+
+  /sub:spawn --/<name> [arguments]"
 fi
 
 # Spawning from a directory other than the one the user invoked from would put
@@ -81,8 +95,9 @@ fi
 set -- --origin hook
 [ -n "$name" ]  && set -- "$@" --name "$name"
 [ -n "$model" ] && set -- "$@" --model "$model"
+[ -n "$command" ] && set -- "$@" --command "$command"
 
-out="$(printf '%s\n' "$task" | SUB_SESSION_ID="$sid" bash "$here/spawn.sh" "$@" 2>&1)"
+out="$(printf '%s' "$task" | SUB_SESSION_ID="$sid" bash "$here/spawn.sh" "$@" 2>&1)"
 rc=$?
 
 if [ $rc -ne 0 ]; then
@@ -98,9 +113,16 @@ model_used="$(field 'model')"
 # A pane and a briefing, not yet a running session: the boot is deliberately not
 # waited on. Say only what is known — if it never reaches a prompt, a herdr
 # notification fires at that moment and the relay repeats it on the next turn.
+if [ -n "$command" ]; then
+  briefed="First prompt: $command, run as if typed there — it has none of this
+conversation."
+else
+  briefed="Briefing: the task text, verbatim — it has none of this conversation."
+fi
+
 block "$sub_name is starting in pane $pane on $model_used.
 
-Briefing: the task text, verbatim — it has none of this conversation. It reports
+$briefed It reports
 back here by message when it is done, and you can talk to it in its pane now.
 
 To fill it in from here, ask me to brief $sub_name."

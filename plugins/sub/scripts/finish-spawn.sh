@@ -24,9 +24,17 @@ sid="${SUB_F_SID:-}"
 detached="${SUB_F_DETACHED:-0}"
 parent="${SUB_F_PARENT:-}"
 
+command="${SUB_F_COMMAND:-}"
+
+if [ -n "$command" ]; then
+  claude_args=(--model "$model" --append-system-prompt-file "$briefing" "$command")
+else
+  claude_args=(--model "$model" "@$briefing")
+fi
+
 prof "finish: start"
 start="$(herdr agent start "$name" --kind claude --pane "$pane" --timeout 90000 \
-  -- --model "$model" "@$briefing" 2>&1)"
+  -- "${claude_args[@]}" 2>&1)"
 prof "finish: herdr agent start returned"
 
 ready=true
