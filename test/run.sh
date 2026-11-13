@@ -81,6 +81,16 @@ check "nickname comes from the registry" "Parent session nickname: test-parent" 
 check "model falls back to settings" "on test-model" \
   "$(printf 'task\n' | run bash "$spawn" --dry-run --name sub-m)"
 
+echo "effort suffix"
+check "a level suffix sets the effort" "on sonnet at high effort" \
+  "$(printf 'task\n' | run bash "$spawn" --dry-run --name sub-e --model sonnet:high)"
+check "a bare suffix keeps the inherited model" "on test-model at max effort" \
+  "$(printf 'task\n' | run bash "$spawn" --dry-run --name sub-e --model :max)"
+check "a non-level suffix stays part of the id" "on bedrock-v1:0 ---" \
+  "$(printf 'task\n' | run bash "$spawn" --dry-run --name sub-e --model bedrock-v1:0)"
+check "a level-named model is not split" "on high ---" \
+  "$(printf 'task\n' | run bash "$spawn" --dry-run --name sub-e --model high)"
+
 echo "hook argument handling"
 payload() { jq -nc --arg a "$1" --arg c "${2:-/tmp}" \
   '{session_id:"test-session",cwd:$c,command_name:"sub:spawn",command_args:$a}'; }
@@ -146,6 +156,10 @@ check "a failure wins whatever order the lines landed in" "FAILED TO START" \
 
 seed "$(spawned sub-k skill)" '{"name":"sub-k","pane":"w1:p2","status":"blocked"}'
 check "a blocked delegate spawn is still reported" "waiting at a dialog in pane w1:p2" \
+  "$(printf '%s' "$rpay" | run bash "$relay")"
+
+seed "$(spawned sub-x | jq -c '.effort = "high"')"
+check "the relay names a chosen effort" "model m at high effort" \
   "$(printf '%s' "$rpay" | run bash "$relay")"
 
 seed "$(spawned sub-f)" "$(spawned sub-g)"
@@ -246,11 +260,13 @@ frun() { # frun <sub-name> <start: ok|not_ready> <pane agent: none|idle|blocked>
   STUB_START="$2" STUB_AGENT="$3" \
   SUB_F_NAME="$1" SUB_F_PANE="w9:p9" SUB_F_MODEL="m" SUB_F_BRIEFING="/b.md" \
   SUB_F_SID="finish-session" SUB_F_PARENT="test-parent" SUB_F_DETACHED=1 \
-  SUB_F_COMMAND="${FCMD:-}" bash "$fin" 2>&1
+  SUB_F_COMMAND="${FCMD:-}" SUB_F_EFFORT="${FEFFORT:-}" bash "$fin" 2>&1
 }
 
 frun sub-brief ok idle >/dev/null
 check "a briefing starts the sub as its first prompt" "-- --model m @/b.md" "$(cat "$flog")"
+FEFFORT=high frun sub-eff ok idle >/dev/null
+check "an effort is passed to the sub" "-- --model m --effort high @/b.md" "$(cat "$flog")"
 FCMD='/pm-hello now' frun sub-cmd ok idle >/dev/null
 check "a command starts the sub with the briefing as system prompt" \
   "-- --model m --append-system-prompt-file /b.md /pm-hello now" "$(cat "$flog")"

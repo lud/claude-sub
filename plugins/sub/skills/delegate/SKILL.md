@@ -20,7 +20,7 @@ One Bash call per sub. The script resolves this session's nickname and model,
 writes the briefing, splits a pane and starts the session:
 
 ```bash
-"${CLAUDE_PLUGIN_ROOT}/scripts/spawn.sh" --name <name> [--model <id>] <<'BRIEF'
+"${CLAUDE_PLUGIN_ROOT}/scripts/spawn.sh" --name <name> [--model <id>[:<effort>]] <<'BRIEF'
 <the task>
 
 <the context>
@@ -31,7 +31,9 @@ BRIEF
   beats `sub-1` when you are running several: `sub-parser`, `sub-migration`.
 - `--model` — omit it and the sub inherits this session's exact model id. Pass it
   only when the user asked for a different one, or when the work is clearly
-  cheaper than this conversation.
+  cheaper than this conversation. A `:<effort>` suffix (`low`, `medium`, `high`,
+  `xhigh`, `max`) sets the sub's effort level: `sonnet:high`, or `:high` to keep
+  the inherited model. Without it the sub runs at Claude Code's default effort.
 - `--command "/<name> [arguments]"` — when the task is to run a skill or slash
   command (the user may write it `--/<name>`). The sub starts with it as its first
   prompt, so it expands as if the user typed it there; the heredoc carries only

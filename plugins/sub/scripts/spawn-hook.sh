@@ -75,7 +75,7 @@ fi
 if [ -z "${task//[[:space:]]/}" ] && [ -z "$command" ]; then
   block "sub: nothing to delegate.
 
-  /sub:spawn [--model <id>] [--name <id>] <task>
+  /sub:spawn [--model <id>[:<effort>]] [--name <id>] <task>
 
 The task text becomes the sub's briefing verbatim, and that is all the sub knows.
 When the task leans on this conversation, use /sub:delegate instead.
@@ -109,6 +109,8 @@ field() { printf '%s' "$out" | sed -n "s/^  $1: *//p" | head -1; }
 sub_name="$(field 'sub name')"
 pane="$(field 'pane')"
 model_used="$(field 'model')"
+effort_used="$(field 'effort')"
+case "$effort_used" in ""|default) ;; *) model_used="$model_used at $effort_used effort" ;; esac
 
 # A pane and a briefing, not yet a running session: the boot is deliberately not
 # waited on. Say only what is known — if it never reaches a prompt, a herdr

@@ -38,6 +38,7 @@ printf '%s' "$last" | jq -r '
   "sub_name:    \(.name)",
   "pane:        \(.pane)",
   "model:       \(.model)",
+  "effort:      \(.effort // "default")",
   "cwd:         \(.cwd)",
   "briefing:    \(.briefing)",
   "task_given:  \(.task)"

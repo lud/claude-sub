@@ -30,12 +30,17 @@ claude plugin install sub@claude-sub
 Both funnel through `scripts/spawn.sh`, which is the only place a sub is ever
 created, and both return as soon as the pane exists.
 
-### `/sub:spawn [--model <id>] [--name <id>] <task>`
+### `/sub:spawn [--model <id>[:<effort>]] [--name <id>] <task>`
 
 The hook spawns and blocks. The task text is the briefing, verbatim, and that is
 all the sub will ever know. The parent never runs — it finds out on its next turn,
 from the relay. The right door for work that stands on its own: "bump the deps and
 run the suite".
+
+`--model` takes an optional effort suffix, passed to the sub as `--effort`:
+`--model sonnet:high`, or `--model :max` to keep the parent's model. The levels are
+`low`, `medium`, `high`, `xhigh` and `max`. Without a suffix the sub runs at Claude
+Code's default effort.
 
 To hand the sub a skill or command, write its leading slash as `--/`:
 `/sub:spawn --/pm-hello`. Claude Code's prompt removes a known `/<name>` placed

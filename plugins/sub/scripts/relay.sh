@@ -52,7 +52,7 @@ while IFS= read -r rec; do
   nick=""
   [ -n "$pane" ] && { nick="$(agent_nickname "$pane" 2>/dev/null)" || nick=""; }
   line="$(printf '%s' "$rec" | jq -r --arg k "$nick" '
-    "- \(.name) — pane \(.pane // "?"), model \(.model // "?"), cwd \(.cwd // "?")\n" +
+    "- \(.name) — pane \(.pane // "?"), model \(.model // "?")\(if .effort then " at \(.effort) effort" else "" end), cwd \(.cwd // "?")\n" +
     (if $k != "" then "  address: \($k)\n"
      else "  address: not known yet; it is the from-name of its first message\n" end) +
     "  task: \(.task // "?")"')"

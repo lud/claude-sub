@@ -15,7 +15,7 @@ here="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=lib.sh
 . "$here/lib.sh"
 
-name=""; model=""; direction=""; command=""; force=0; dry=0; origin="skill"; detach=1
+name=""; model=""; effort=""; direction=""; command=""; force=0; dry=0; origin="skill"; detach=1
 
 # Every value-taking option is checked before the shift: `shift 2` on a lone
 # trailing flag fails, leaves the arguments untouched, and spins forever.
@@ -56,6 +56,12 @@ parent="$(my_nickname)"
 [ -n "$parent" ] || die "could not resolve this session's messaging nickname"
 [ -n "$name" ] || name="$(next_sub_name)"
 valid_sub_name "$name" || die "sub name must match [a-z][a-z0-9_-]{0,31}: $name"
+# `--model sonnet:high` also sets the effort; `--model :high` keeps the inherited
+# model. Only a known level splits, since Bedrock ids end in a `:0` of their own.
+case "${model##*:}" in
+  low|medium|high|xhigh|max)
+    if [ "$model" != "${model##*:}" ]; then effort="${model##*:}"; model="${model%:*}"; fi ;;
+esac
 [ -n "$model" ] || model="$(my_model)"
 [ -n "$model" ] || die "could not resolve a model id; pass --model"
 [ -n "$direction" ] || direction="$(split_direction)"
@@ -95,7 +101,7 @@ BODY="$body" PARENT="$parent" CWD="$PWD" SUB_NAME="$name" BRIEFING_PATH="$briefi
 
 if [ "$dry" -eq 1 ]; then
   echo "--- would write $briefing ---"; cat "$tmp"
-  echo "--- would split $direction from ${HERDR_PANE_ID:-?} and start $name on $model ---"
+  echo "--- would split $direction from ${HERDR_PANE_ID:-?} and start $name on $model${effort:+ at $effort effort} ---"
   if [ -n "$command" ]; then echo "--- would start it with the briefing as system prompt and $command as first prompt ---"
   else echo "--- would start it with the briefing as first prompt ---"; fi
   if [ "$detach" -eq 1 ]; then echo "--- would detach the start and return immediately ---"
@@ -126,15 +132,16 @@ state_recorded=no
 sid="$(my_session_id)"
 task_line="$(printf '%s' "$body" | tr '\n' ' ' | cut -c1-200)"
 if record_state "$sid" "$(jq -nc --arg n "$name" --arg p "$pane" --arg m "$model" \
-      --arg c "$PWD" --arg b "$briefing" --arg t "$task_line" --arg o "$origin" \
+      --arg e "$effort" --arg c "$PWD" --arg b "$briefing" --arg t "$task_line" --arg o "$origin" \
       --argjson ts "$(date +%s)" \
-      '{name:$n,pane:$p,model:$m,cwd:$c,briefing:$b,task:$t,origin:$o,
+      '{name:$n,pane:$p,model:$m,effort:(if $e == "" then null else $e end),cwd:$c,briefing:$b,task:$t,origin:$o,
         status:"starting",ts:$ts}')"; then
   state_recorded=yes
 fi
 
 finish_env=(
   "SUB_F_NAME=$name" "SUB_F_PANE=$pane" "SUB_F_MODEL=$model"
+  "SUB_F_EFFORT=$effort"
   "SUB_F_BRIEFING=$briefing" "SUB_F_SID=$sid" "SUB_F_PARENT=$parent"
   "SUB_F_COMMAND=$command"
 )
@@ -155,6 +162,7 @@ SUB_STARTING
   sub name:   $name
   pane:       $pane
   model:      $model
+  effort:     ${effort:-default}
   cwd:        $PWD
   briefing:   $briefing
   reports to: $parent

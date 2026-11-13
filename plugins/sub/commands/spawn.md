@@ -1,6 +1,6 @@
 ---
 description: Delegate a task to a new interactive Claude Code session in a sibling Herdr pane.
-argument-hint: "[--model <id>] [--name <id>] <task>"
+argument-hint: "[--model <id>[:<effort>]] [--name <id>] <task>"
 disable-model-invocation: true
 allowed-tools: [Bash]
 ---
@@ -20,7 +20,7 @@ State of play:
 Do the spawn. One Bash call:
 
 ```bash
-"${CLAUDE_PLUGIN_ROOT}/scripts/spawn.sh" --name <suggested_name> [--model <id>] [--command "/<name> [arguments]"] <<'BRIEF'
+"${CLAUDE_PLUGIN_ROOT}/scripts/spawn.sh" --name <suggested_name> [--model <id>[:<effort>]] [--command "/<name> [arguments]"] <<'BRIEF'
 <the task from $ARGUMENTS, verbatim, with --model and --name stripped>
 
 <context from this conversation that the task text does not carry>

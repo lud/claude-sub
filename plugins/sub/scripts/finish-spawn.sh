@@ -24,12 +24,15 @@ sid="${SUB_F_SID:-}"
 detached="${SUB_F_DETACHED:-0}"
 parent="${SUB_F_PARENT:-}"
 
+effort="${SUB_F_EFFORT:-}"
 command="${SUB_F_COMMAND:-}"
 
+claude_args=(--model "$model")
+[ -n "$effort" ] && claude_args+=(--effort "$effort")
 if [ -n "$command" ]; then
-  claude_args=(--model "$model" --append-system-prompt-file "$briefing" "$command")
+  claude_args+=(--append-system-prompt-file "$briefing" "$command")
 else
-  claude_args=(--model "$model" "@$briefing")
+  claude_args+=("@$briefing")
 fi
 
 prof "finish: start"
@@ -74,6 +77,7 @@ SUB_START_FAILED
   sub name:  $name
   pane:      $pane
   model:     $model
+  effort:    ${effort:-default}
   briefing:  $briefing
   herdr said: $start
 
@@ -122,6 +126,7 @@ SUB_STARTED
   nickname:   ${nickname:-unresolved}
   pane:       $pane
   model:      $model
+  effort:     ${effort:-default}
   cwd:        $PWD
   briefing:   $briefing
   reports to: $parent
