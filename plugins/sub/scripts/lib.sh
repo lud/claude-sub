@@ -60,16 +60,6 @@ my_model() {
   jq -r '.model // empty' "$CLAUDE_DIR/settings.json" 2>/dev/null
 }
 
-# right for a wide pane, down for a narrow or tall one.
-split_direction() {
-  local w
-  w="$(herdr pane layout --pane "$HERDR_PANE_ID" 2>/dev/null \
-    | jq -r --arg p "$HERDR_PANE_ID" \
-        '.result.layout.panes[] | select(.pane_id == $p) | .rect.width' 2>/dev/null)"
-  [ -n "$w" ] || w=0
-  if [ "$w" -ge 160 ]; then printf 'right'; else printf 'down'; fi
-}
-
 agent_name_taken() { herdr agent get "$1" >/dev/null 2>&1; }
 
 # What herdr sees in a pane, whatever the start concluded. `agent get` takes a

@@ -64,7 +64,7 @@ case "${model##*:}" in
 esac
 [ -n "$model" ] || model="$(my_model)"
 [ -n "$model" ] || die "could not resolve a model id; pass --model"
-[ -n "$direction" ] || direction="$(split_direction)"
+[ -n "$direction" ] || direction=right
 prof "spawn: resolved nickname, name, model, direction"
 
 mkdir -p "$SUB_TASKS_DIR"
