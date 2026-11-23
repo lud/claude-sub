@@ -58,6 +58,27 @@ case "$task" in
   "--/"*) task="" ;;
 esac
 
+# Flag parsing stops at --/<name>, so a --model or --name written after it would
+# reach the sub's command as an argument and the sub would start on the defaults.
+if [ -n "$command" ]; then
+  read -ra words <<< "$command"
+  flags=(); kept=(); i=1
+  while [ "$i" -lt "${#words[@]}" ]; do
+    case "${words[$i]}" in
+      --model|--name) flags+=("${words[$i]}" "${words[$((i + 1))]:-<value>}"); i=$((i + 2)) ;;
+      *) kept+=("${words[$i]}"); i=$((i + 1)) ;;
+    esac
+  done
+  if [ "${#flags[@]}" -gt 0 ]; then
+    block "sub: ${flags[0]} comes after --${words[0]}, so it would reach ${words[0]} as an
+argument and the sub would start without it. Flags go before --/<name>:
+
+  /sub:spawn ${flags[*]} --${words[0]}${kept[*]+ ${kept[*]}}
+
+Nothing was started."
+  fi
+fi
+
 # --brief used to start the sub here and let the expansion through so the model
 # could send it context afterwards. /sub:delegate does the same job in one piece
 # and writes the context into the briefing file, so nothing is spawned here: a sub
@@ -83,7 +104,7 @@ When the task leans on this conversation, use /sub:delegate instead.
 To have the sub run a skill or command, write it as --/<name>: Claude Code
 removes a /<name> placed right after /sub:spawn before it reaches the sub.
 
-  /sub:spawn --/<name> [arguments]"
+  /sub:spawn [--model <id>[:<effort>]] [--name <id>] --/<name> [arguments]"
 fi
 
 # Spawning from a directory other than the one the user invoked from would put

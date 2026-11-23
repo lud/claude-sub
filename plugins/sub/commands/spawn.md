@@ -30,7 +30,8 @@ BRIEF
 When the task starts with `--/<name>`, it asks the sub to run that skill or
 command: pass it as `--command "/<name> [arguments]"` with the leading `--/`
 written as `/`, and leave it out of the heredoc. The sub starts with it as its
-first prompt.
+first prompt. `--model` and `--name` must come before `--/<name>`; if either
+appears after it, do not spawn — tell the user to move it in front.
 
 You are spending a turn either way, so use it: the heredoc is the sub's whole
 briefing and it starts with an empty context. Add what it cannot discover — files

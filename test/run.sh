@@ -239,7 +239,18 @@ check "a bare --/ is nothing to delegate" "nothing to delegate" "$(payload '--/'
 payload '--name sub-mid run it --/later' | hrun >/dev/null
 check "a --/ past the start is left alone" "run it --/later" \
   "$(cat "$fixture/sub-tasks/sub-mid.md" 2>/dev/null)"
-rm -f "$fixture/sub-tasks/sub-skill.md" "$fixture/sub-tasks/sub-mid.md"
+out="$(payload '--/implement-tests --model sonnet' | hrun)"
+check "a --model after --/ is refused" "--model comes after --/implement-tests" "$out"
+check "the refusal moves the flag to the front" \
+  "/sub:spawn --model sonnet --/implement-tests" "$out"
+check "the refusal starts nothing" "Nothing was started" "$out"
+out="$(payload '--/implement-tests the parser --name sub-t' | hrun)"
+check "a --name after --/ is refused, arguments kept" \
+  "/sub:spawn --name sub-t --/implement-tests the parser" "$out"
+payload '--model sonnet --name sub-ok --/implement-tests' | hrun >/dev/null
+check "flags before --/ still apply" 'Your first message runs the slash command `/implement-tests`' \
+  "$(cat "$fixture/sub-tasks/sub-ok.md" 2>/dev/null)"
+rm -f "$fixture/sub-tasks/sub-skill.md" "$fixture/sub-tasks/sub-mid.md" "$fixture/sub-tasks/sub-ok.md"
 check "a command must start with /" "must start with /" \
   "$(: | run bash "$spawn" --dry-run --name sub-c --command pm-hello)"
 out="$(: | run bash "$spawn" --dry-run --name sub-c --command '/pm-hello now')"

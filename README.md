@@ -51,6 +51,11 @@ prompt, so it expands there as if the user had typed it — skills marked
 system prompt instead (`--append-system-prompt-file`), which also keeps it
 through compaction.
 
+`--model` and `--name` go before `--/<name>`: `/sub:spawn --model sonnet
+--/implement-tests`. Everything after `--/<name>` is that command's arguments, so
+the hook refuses a `--model` or `--name` found there, starts nothing, and shows the
+invocation with the flags moved to the front.
+
 The spawn returns in ~85ms. Waiting for the new session to reach a prompt is
 another 4.4–12.5s of Claude Code boot, and nothing in the turn reads that result,
 so it is handed to a detached finisher and the prompt comes straight back. The
